@@ -22,9 +22,18 @@ dist/
 *.bak
 
 # Generated eval + sandbox workspaces.
-evals/workspace/
+#
+# NOTE: `evals/workspace/` is deliberately NOT ignored. It looks like scratch
+# space but holds `config.yaml`, a committed fixture that the reader-boundary
+# cases and `test_sabotage.py` both read. Ignoring it left the local suite green
+# -- the file was on disk -- while every clean checkout, CI included, failed
+# with two reader-boundary cases and a fixture test red. Scratch space that a
+# test depends on has to be tracked.
 tmp-ws/
 audit.txt
+
+# A canary the demo tries to read from outside the workspace. It is meant to be
+# absent, and nothing requires it to exist.
 secret-outside.txt
 
 # Never commit credentials. Nothing in this repo needs one; the verify scripts

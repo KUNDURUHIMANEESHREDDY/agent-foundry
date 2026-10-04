@@ -1,0 +1,3 @@
+project: reader-eval-workspace
+description: Fixture the reader agent is entitled to read during evals.
+version: 1.0.0
