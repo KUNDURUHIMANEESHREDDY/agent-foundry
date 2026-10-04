@@ -15,7 +15,7 @@ behind **hardened subprocess execution** — env scrubbing, output caps, a kille
 process tree. It is *not* a sandbox and never was: arbitrary Python still runs
 with the calling user's OS privileges.
 
-- **948 tests collected**, 3 skipped (symlink checks unavailable on Windows)
+- **958 tests collected**, 3 skipped (symlink checks unavailable on Windows)
 - **55 eval cases** across 5 suites, 55/55 passing, 0 security failures
 - **`factory sabotage`**: 9 mitigations, 9 accounted for, exit 0
 - **`isolation: container` gives `python.execute` real containment** — read-only
@@ -1181,8 +1181,11 @@ comparison can leak to the string value.
 runtime. Without one the capability refuses, so every containment assertion fails
 for the wrong reason and the baseline goes red on a machine that is fine.
 Silently passing would be worse: CI green, containment untested. So suites declare
-`requires: [container]`, unmet requirements are reported as skips, and **CI
-asserts zero skips** where the runtime is known to exist.
+`requires: [container]`, unmet requirements become skips, and a skip makes
+`factory eval` **exit non-zero** — a tool whose job is proving things should not
+report success when a suite proved nothing. Skips are counted separately from
+failures and never render as a 100% pass rate, and CI asserts the containment
+suite ran at all.
 
 ## Where this is safe to use
 

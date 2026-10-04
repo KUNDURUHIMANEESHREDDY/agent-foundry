@@ -50,12 +50,19 @@ jobs:
           factory eval --suites evals --json > eval.json
           python - <<'PY'
           import json, sys
-          data = json.load(open("eval.json", encoding="utf-8"))
-          skipped = sum(s.get("skipped", 0) for s in data)
+          report = json.load(open("eval.json", encoding="utf-8"))
+          # The envelope is {"suites": [...], "totals": {...}} -- not a bare
+          # list. The first version of this gate iterated the top-level object
+          # and died with "'str' object has no attribute 'get'", which meant the
+          # gate never actually evaluated its own condition.
+          suites = report["suites"]
+          skipped = sum(s.get("skipped", 0) for s in suites)
           if skipped:
-              names = [s["suite"] for s in data if s.get("skipped")]
+              names = [s["suite"] for s in suites if s.get("skipped")]
               sys.exit(f"{skipped} eval case(s) skipped in {names}: "
                        f"containment was not tested")
+          if not any(s["suite"] == "container-isolation" for s in suites):
+              sys.exit("the container-isolation suite did not run at all")
           print("every containment case ran")
           PY
 

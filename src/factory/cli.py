@@ -147,11 +147,18 @@ def cmd_eval(args: argparse.Namespace) -> int:
     # diagnosis is different: this is a broken suite definition, not a regression.
     unloadable = [s for s in summaries if s.error]
 
+    # `--json` must be machine-readable on its own. Warnings and the BLOCKED
+    # banner go to stderr so a consumer parsing stdout is not handed trailing
+    # prose -- which is exactly what happened: the CI gate did
+    # `json.load(open("eval.json"))` and got "Extra data: line 548".
+    notes = sys.stderr if args.json else sys.stdout
+
     if unloadable:
         print(
             "\nBLOCKED: "
             + ", ".join(f"{s.suite} ({s.error.splitlines()[0]})" for s in unloadable)
-            + "\nThese suites ran no cases. That is not a pass."
+            + "\nThese suites ran no cases. That is not a pass.",
+            file=notes,
         )
 
     # A skipped suite is not a failure -- it is an absence of evidence, and the
@@ -161,7 +168,8 @@ def cmd_eval(args: argparse.Namespace) -> int:
     if skipped_total:
         print(
             f"\nWARNING: {skipped_total} eval case(s) were SKIPPED for want of an "
-            f"external runtime. They proved nothing. CI asserts these ran."
+            f"external runtime. They proved nothing. CI asserts these ran.",
+            file=notes,
         )
 
     return 1 if sec or broken or unloadable else 0
