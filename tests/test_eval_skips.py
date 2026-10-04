@@ -30,6 +30,7 @@ from factory.eval.case import Suite
 from factory.eval.runner import unmet_requirements
 
 EVALS = Path(__file__).resolve().parents[1] / "evals"
+README = EVALS.parent / "README.md"
 
 
 def _suites() -> list[Suite]:
@@ -211,10 +212,16 @@ class TestTheCiGateExists:
     def test_the_workflow_exists(self):
         assert self.WORKFLOW.is_file()
 
-    def test_ci_asserts_nothing_was_skipped(self):
+    def test_ci_asserts_nothing_unexpected_was_skipped(self):
+        """The gate's original wording; generalised when windows was accounted for.
+
+        It no longer says "containment was not tested" because containment *is*
+        legitimately untested on windows-latest. What it still refuses is a skip
+        the runner was not supposed to have.
+        """
         text = self.WORKFLOW.read_text(encoding="utf-8")
         assert "Containment cases actually ran" in text
-        assert "containment was not tested" in text
+        assert "unexpected skip" in text
 
     def test_the_check_unwraps_the_report_envelope(self):
         """The gate must read `report["suites"]`, not iterate the top level.
@@ -235,6 +242,39 @@ class TestTheCiGateExists:
         text = self.WORKFLOW.read_text(encoding="utf-8")
         assert "--json" in text
         assert '"skipped"' in text
+
+    def test_each_runner_declares_what_may_skip(self):
+        """Containment is proven on ubuntu; windows has no usable runtime.
+
+        windows-latest cannot run a Linux container image, so the suite skips
+        there. Naming it is the point: an *unexpected* skip still fails, so the
+        declaration cannot quietly widen, and containment is proven somewhere in
+        the matrix, so the build cannot pass without it.
+        """
+        text = self.WORKFLOW.read_text(encoding="utf-8")
+        assert "expect_skips" in text
+        assert "container-isolation" in text
+
+    def test_the_gate_checks_both_directions(self):
+        """A stale declaration fails too.
+
+        If windows-latest ever grows a usable runtime, `expect_skips` would be
+        out of date, and a gate that only checked for unexpected skips would
+        keep allowing a suite to stop being tested.
+        """
+        text = self.WORKFLOW.read_text(encoding="utf-8")
+        assert "unexpected skip" in text
+        assert "expected to skip but ran" in text
+
+    def test_no_ci_debug_logs_are_tracked(self):
+        """They get committed by accident when a failing run is inspected."""
+        import subprocess
+
+        tracked = subprocess.run(
+            ["git", "ls-files"], capture_output=True, text=True, cwd=README.parent
+        ).stdout.splitlines()
+        logs = [p for p in tracked if p.endswith(".log")]
+        assert not logs, f"CI logs are tracked: {logs}"
 
     def test_json_stdout_is_pure_json_even_when_warnings_fire(self):
         """`--json` must be parseable on its own.

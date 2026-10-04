@@ -46,3 +46,6 @@ id_rsa*
 .vscode/
 .DS_Store
 Thumbs.db
+
+# CI debug logs pulled down with gh run view.
+ci_*.log

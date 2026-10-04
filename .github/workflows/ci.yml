@@ -12,7 +12,20 @@ jobs:
       matrix:
         # The audit shells out to git and to subprocesses; the symlink guards in
         # the capability tests are skipped on Windows, so both are covered.
+        #
+        # `expect_skips` is the set of eval suites allowed to skip on that runner.
+        # ubuntu-latest has a working container runtime, so nothing may skip
+        # there. windows-latest has no usable one -- and `python:3.11-slim` is a
+        # Linux image, so it cannot run against Windows containers either -- so
+        # the containment suite is expected to skip. Naming it here is the point:
+        # an *unexpected* skip still fails, and containment is proven on ubuntu,
+        # so the build as a whole cannot pass without it.
         os: [ubuntu-latest, windows-latest]
+        include:
+          - os: ubuntu-latest
+            expect_skips: ""
+          - os: windows-latest
+            expect_skips: "container-isolation"
 
     steps:
       - uses: actions/checkout@v4
@@ -46,24 +59,44 @@ jobs:
         # and wrong here: these runners have a container runtime, so a skip means
         # the containment claims were never tested and the build says nothing.
         shell: bash
+        env:
+          EXPECTED_SKIPPED_SUITES: ${{ matrix.expect_skips }}
         run: |
           factory eval --suites evals --json > eval.json
           python - <<'PY'
-          import json, sys
-          report = json.load(open("eval.json", encoding="utf-8"))
+          import json, os, sys
+
           # The envelope is {"suites": [...], "totals": {...}} -- not a bare
           # list. The first version of this gate iterated the top-level object
           # and died with "'str' object has no attribute 'get'", which meant the
           # gate never actually evaluated its own condition.
+          report = json.load(open("eval.json", encoding="utf-8"))
           suites = report["suites"]
-          skipped = sum(s.get("skipped", 0) for s in suites)
-          if skipped:
-              names = [s["suite"] for s in suites if s.get("skipped")]
-              sys.exit(f"{skipped} eval case(s) skipped in {names}: "
-                       f"containment was not tested")
-          if not any(s["suite"] == "container-isolation" for s in suites):
-              sys.exit("the container-isolation suite did not run at all")
-          print("every containment case ran")
+
+          skipped = {s["suite"] for s in suites if s.get("skipped")}
+          expected = {
+              name.strip()
+              for name in os.environ.get("EXPECTED_SKIPPED_SUITES", "").split(",")
+              if name.strip()
+          }
+
+          unexpected = skipped - expected
+          if unexpected:
+              sys.exit(f"unexpected skip(s): {sorted(unexpected)} -- these suites "
+                       f"must run on this runner")
+
+          # The other direction matters too: a suite listed as expected to skip
+          # that actually ran means the runtime is present and the declaration
+          # is stale, which would let the gate drift towards skipping nothing.
+          unexpectedly_ran = expected - skipped
+          if unexpectedly_ran:
+              sys.exit(f"expected to skip but ran: {sorted(unexpectedly_ran)} -- "
+                       f"the runtime is available, so drop it from expect_skips")
+
+          if "container-isolation" not in {s["suite"] for s in suites}:
+              sys.exit("the container-isolation suite did not appear at all")
+
+          print(f"skipped suites: {sorted(skipped) or 'none'}")
           PY
 
   # The suite passing is not evidence that the suite works. This job breaks one

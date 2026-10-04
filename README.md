@@ -15,7 +15,7 @@ behind **hardened subprocess execution** — env scrubbing, output caps, a kille
 process tree. It is *not* a sandbox and never was: arbitrary Python still runs
 with the calling user's OS privileges.
 
-- **958 tests collected**, 3 skipped (symlink checks unavailable on Windows)
+- **961 tests collected**, 3 skipped (symlink checks unavailable on Windows)
 - **55 eval cases** across 5 suites, 55/55 passing, 0 security failures
 - **`factory sabotage`**: 9 mitigations, 9 accounted for, exit 0
 - **`isolation: container` gives `python.execute` real containment** — read-only
