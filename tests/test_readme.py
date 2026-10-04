@@ -104,40 +104,15 @@ class TestReadmeFileLinks:
         assert path.is_file(), f"{target} does not exist"
 
 
-class TestLicenseIsDeclaredSomewhere:
-    """A licence has to be findable without reading pyproject."""
+class TestReadmeMentionsItsLicence:
+    """The one licence concern that belongs here: the README points at it.
 
-    def test_license_file_is_tracked(self):
-        assert (README.parent / "LICENSE").is_file()
+    Whether the licence *file* exists, and whether it agrees with pyproject, is
+    `tests/test_packaging.py` -- packaging metadata is not a README concern, and
+    burying it in this file meant nobody auditing packaging would think to look
+    here for it.
+    """
 
-    def test_license_file_is_not_empty(self):
-        assert (README.parent / "LICENSE").read_text(encoding="utf-8").strip()
-
-    def test_readme_names_the_license(self):
+    def test_readme_has_a_licence_section(self):
         text = README.read_text(encoding="utf-8")
         assert re.search(r"(?im)^#+ .*licen[sc]e", text), "README has no licence section"
-
-    def test_pyproject_declares_an_spdx_identifier(self):
-        """
-        A bare `LICENSE` file is invisible to tooling; PyPI and `pip show` read
-        the metadata. Assert the identifier is a real SPDX expression rather than
-        free text, so the two cannot drift apart.
-        """
-        pyproject = (README.parent / "pyproject.toml").read_text(encoding="utf-8")
-        declared = re.search(r'(?m)^\s*license\s*=\s*"([^"]+)"', pyproject)
-        assert declared, "pyproject declares no license"
-
-        spdx = declared.group(1).strip()
-        assert re.fullmatch(r"[A-Za-z0-9.+-]+", spdx), (
-            f"{spdx!r} is not a bare SPDX identifier -- PEP 639 form expected"
-        )
-
-    def test_the_declared_license_matches_the_file(self):
-        """The metadata and the text must not disagree about which one this is."""
-        pyproject = (README.parent / "pyproject.toml").read_text(encoding="utf-8")
-        spdx = re.search(r'(?m)^\s*license\s*=\s*"([^"]+)"', pyproject).group(1)
-
-        text = (README.parent / "LICENSE").read_text(encoding="utf-8")
-        assert spdx in text, (
-            f"pyproject declares {spdx!r} but LICENSE does not mention it"
-        )

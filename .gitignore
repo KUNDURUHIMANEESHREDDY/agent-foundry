@@ -21,14 +21,11 @@ dist/
 *.db-shm
 *.bak
 
-# Generated eval + sandbox workspaces.
-#
-# NOTE: `evals/workspace/` is deliberately NOT ignored. It looks like scratch
-# space but holds `config.yaml`, a committed fixture that the reader-boundary
-# cases and `test_sabotage.py` both read. Ignoring it left the local suite green
-# -- the file was on disk -- while every clean checkout, CI included, failed
-# with two reader-boundary cases and a fixture test red. Scratch space that a
-# test depends on has to be tracked.
+# Generated workspaces. NOT ignored: `evals/workspace/` holds `config.yaml`, a
+# committed fixture that the reader-boundary cases and `test_sabotage.py` both
+# read. Ignoring it left the local suite green -- the file was on disk -- while
+# every clean checkout failed. `tests/test_packaging.py` now fails the moment
+# such a rule is written, before anything is committed.
 tmp-ws/
 audit.txt
 
