@@ -1,5 +1,9 @@
 [build-system]
-requires = ["setuptools>=68"]
+# setuptools>=77 is the floor for PEP 639 support, which lets `license` be a
+# plain SPDX identifier. The older `license = { text = ... }` form is deprecated
+# there, and the intermediate `license = { file = ... }` form would put the whole
+# licence text into package metadata instead of a classifier.
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,6 +11,8 @@ name = "agent-factory"
 version = "0.1.0"
 description = "Compile declarative agent specs into sandboxed executable agents"
 requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
 dependencies = [
     "pydantic>=2.7",
     "pyyaml>=6.0",

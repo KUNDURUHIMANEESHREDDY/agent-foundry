@@ -1134,6 +1134,23 @@ Every fix here is now covered by a test that goes red when the fix is undone.
 3. Agent-vs-agent eval: same suites, different spec versions, measured
 4. Supervisor pattern for multi-agent, once single-agent traces are trustworthy
 
+## License
+
+MIT — see [LICENSE](LICENSE). Declared in packaging metadata as an SPDX
+identifier (`License-Expression: MIT`) rather than a classifier, so tooling and
+PyPI can read it without parsing prose.
+
+Reuse the eval and sabotage harness freely. Two caveats worth stating rather than
+leaving implicit:
+
+- **`python.execute` is not a sandbox.** It is subprocess hardening: a scrubbed
+  environment, capped output, a killed process tree. A determined escape is a
+  known gap, documented under [What is deliberately not here](#what-is-deliberately-not-here).
+  Do not point it at untrusted input and call it isolation.
+- **The sabotage audit is the part worth reading.** It is what makes the claims
+  in this README falsifiable: break a mitigation, and the suite fails if it
+  notices.
+
 ## Notes
 
 - Default model is `ollama` / `qwen2.5:7b`. Ollama is **not installed** on this
