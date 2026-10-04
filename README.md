@@ -11,9 +11,11 @@ spec did not request cannot be reached, regardless of what the model says.**
 ## Status
 
 Milestones 1–3 complete: spec + runtime, eval harness, and `python.execute`
-behind a subprocess sandbox.
+behind **hardened subprocess execution** — env scrubbing, output caps, a killed
+process tree. It is *not* a sandbox and never was: arbitrary Python still runs
+with the calling user's OS privileges.
 
-- **551 tests passing**, 3 skipped (symlink checks unavailable on Windows)
+- **851 tests collected**, 3 skipped (symlink checks unavailable on Windows)
 - **44 eval cases** across 3 suites, 44/44 passing, 0 security failures
 - **`factory sabotage`**: 9 mitigations, 9 accounted for, exit 0
 - **API is authenticated and workspace-confined** — the client cannot choose the
@@ -25,11 +27,16 @@ behind a subprocess sandbox.
 - **API state is per-app** — two apps over two dependency sets, no globals
 - **Tenants scope capabilities, traces and specs** — a refused capability is
   never silently downgraded
-- Langfuse verified end-to-end against cloud.langfuse.com
 - No model server required to test the loop, gating, truncation, or failure paths
 
+Two things are **not** verified, and claiming otherwise would be the one failure
+mode this project exists to prevent: the live Langfuse round trip (no
+credentials in the build environment) and any behaviour under a real model. See
+[Still unverified](#still-unverified).
+
 Known gaps are listed under [Audit findings](#audit-findings); all thirteen are
-resolved. This block is regenerated from the code; do not trust it by hand.
+resolved. Every count above is checked against the code by `tests/test_readme.py`,
+so this block cannot drift from reality.
 
 ## Quick start
 
@@ -1076,7 +1083,7 @@ comment and the tests now say so.
 
 ## Audit findings
 
-A review produced twelve findings, all confirmed by running the code and all now
+A review produced thirteen findings, all confirmed by running the code and all now
 resolved. Kept as a record of what was wrong and what each fix rests on — a
 struck-through table that says only "fixed" would lose the reasoning.
 
