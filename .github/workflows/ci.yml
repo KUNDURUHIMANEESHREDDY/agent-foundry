@@ -67,11 +67,19 @@ jobs:
       - name: Verify the working tree is untouched
         # The audit must never patch the repository. If it ever does, fail loudly
         # rather than reporting a result produced by a dirty tree.
+        #
+        # The snapshots go to RUNNER_TEMP, not the working directory. Writing
+        # them here made this step impossible to pass: the shell creates
+        # `after.txt` by redirection before `git status` runs, so the second
+        # snapshot lists its own scratch file and the diff is never empty.
+        # `RUNNER_TEMP` is set on both ubuntu and windows runners.
         run: |
-          git status --porcelain > before.txt
+          before="${RUNNER_TEMP}/tree-before.txt"
+          after="${RUNNER_TEMP}/tree-after.txt"
+          git status --porcelain > "$before"
           factory sabotage --suites evals --jobs 4
-          git status --porcelain > after.txt
-          diff before.txt after.txt && echo "working tree unchanged"
+          git status --porcelain > "$after"
+          diff "$before" "$after" && echo "working tree unchanged"
 
       - name: No temp sandboxes left behind
         run: |
