@@ -373,20 +373,33 @@ def cmd_traces(args: argparse.Namespace) -> int:
 
 
 def cmd_serve(args: argparse.Namespace) -> int:
-    """Start the API.
+    """Start the API, optionally with a frontend served from the same origin.
 
     Refuses a non-loopback bind without auth. Every endpoint past `/health` can
     execute an agent, and the API key is effectively a grant of code execution,
     so an accidental `0.0.0.0` with `FACTORY_API_INSECURE=1` is the kind of
     mistake that is only noticed afterwards.
+
+    With `--ui`, the frontend is served from this same origin rather than being
+    reached over CORS. That is deliberate: this API executes code, so a permissive
+    CORS policy would let any page in the user's browser drive `/run`. One origin
+    needs no CORS headers at all.
     """
     import uvicorn
 
     from factory.api.auth import AuthSettings
+    from factory.api.ui import is_loopback_bind, resolve_ui_dir
     from factory.api.workspaces import WorkspaceRegistry
 
     settings = AuthSettings.from_env()
-    exposed = args.host not in ("127.0.0.1", "localhost", "::1")
+    exposed = not is_loopback_bind(args.host)
+
+    if args.ui:
+        try:
+            resolve_ui_dir(args.ui)
+        except Exception as exc:  # noqa: BLE001 - reported, not swallowed
+            print(f"--ui: {exc}", file=sys.stderr)
+            return 2
 
     if exposed and not settings.enabled:
         print(
@@ -401,7 +414,31 @@ def cmd_serve(args: argparse.Namespace) -> int:
     workspaces = WorkspaceRegistry.from_env()
     print(f"workspaces: {workspaces.describe()}", file=sys.stderr)
 
-    uvicorn.run("factory.api.server:app", host=args.host, port=args.port)
+    if args.ui:
+        # Loopback plus same-origin is the case where a key in browser storage is
+        # worse than no key at all: it is one XSS away from code execution. Say so
+        # plainly rather than making the operator work it out.
+        print(
+            f"UI: serving {args.ui} at http://{args.host}:{args.port}/\n"
+            "  Same origin as the API, so no CORS is configured and none is needed.\n"
+            "  Requests with a non-loopback Host header are refused, which is what\n"
+            "  stops a rebound DNS name from driving the API. If you set\n"
+            "  FACTORY_API_KEY the browser will need it; for a local app you usually\n"
+            "  want FACTORY_API_INSECURE=1 instead.",
+            file=sys.stderr,
+        )
+
+    # A callable app object, because uvicorn's string form re-imports the module
+    # and would discard the --ui mount entirely.
+    if args.ui:
+        from factory.api.server import create_app
+        from factory.api.ui import mount_ui
+
+        application = create_app()
+        mount_ui(application, args.ui, bind_host=args.host)
+        uvicorn.run(application, host=args.host, port=args.port)
+    else:
+        uvicorn.run("factory.api.server:app", host=args.host, port=args.port)
     return 0
 
 
@@ -415,6 +452,17 @@ def main(argv: list[str] | None = None) -> int:
 
     p_serve = sub.add_parser("serve", help="Run the API")
     p_serve.add_argument("--host", default="127.0.0.1")
+    p_serve.add_argument(
+        "--ui",
+        default=None,
+        metavar="DIR",
+        help=(
+            "Serve a built frontend from this same origin (e.g. --ui dist). "
+            "Requires a loopback bind: no CORS is configured, because this API "
+            "executes code and a wildcard policy would let any open web page "
+            "drive it."
+        ),
+    )
     p_serve.add_argument("--port", type=int, default=8000)
     p_serve.set_defaults(func=cmd_serve)
 

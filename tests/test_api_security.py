@@ -487,7 +487,10 @@ class TestServeRefusesUnsafeBinds:
     def _args(self, host):
         import argparse
 
-        return argparse.Namespace(host=host, port=8000)
+        # Mirrors what argparse actually builds for `factory serve`. `ui` was
+        # added for `--ui`; leaving it out here made these three tests fail with
+        # an AttributeError, which is a test bug rather than a behaviour change.
+        return argparse.Namespace(host=host, port=8000, ui=None)
 
     def test_public_bind_without_auth_is_refused(self, monkeypatch, capsys):
         from factory import cli

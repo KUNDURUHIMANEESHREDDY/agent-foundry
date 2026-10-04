@@ -26,6 +26,8 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
+import asyncio
+import json
 from typing import Any
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
@@ -384,6 +386,106 @@ async def run(
         "violations": [v for s in result.trace.steps for v in s.violations],
         "warnings": compiled.warnings,
     }
+
+
+def _sse(event: str, data: dict[str, Any]) -> str:
+    """One server-sent event.
+
+    `event:` carries the type so a client can subscribe selectively, and
+    `data:` is one line of JSON. The blank line after is part of the SSE
+    framing -- without it the client buffers forever.
+    """
+    return f"event: {event}\ndata: {json.dumps(data, default=str)}\n\n"
+
+
+@secure.post("/run/stream")
+async def run_stream(
+    body: RunRequest,
+    deps: ApiDependencies = Depends(get_deps),
+    tenant: Tenant = Depends(resolve_tenant),
+) -> Any:
+    """Run an agent, reporting each step as it completes.
+
+    `/run` answers only when the whole run finishes, which for an agent taking
+    10-30 seconds leaves a frontend with nothing to show. This streams the same
+    run, same trace, same tenant scoping -- it is a second view of one execution,
+    not a second execution.
+
+    Steps are emitted after they are durable, so a client that disconnects and
+    reconnects via `/traces/{id}` sees the same history the stream showed.
+    """
+    from fastapi.responses import StreamingResponse
+
+    compiled = _compile(body, deps, tenant, dry_run=body.dry_run)
+
+    async def generate():
+        queue: asyncio.Queue[tuple[str, dict[str, Any]]] = asyncio.Queue()
+        loop = asyncio.get_running_loop()
+
+        def on_step(record: Any, trace: Any) -> None:
+            # Called from the loop; hop threads because queue.put is not
+            # thread-safe and uvicorn runs the agent on the loop already, but the
+            # callback contract does not promise that.
+            loop.call_soon_threadsafe(
+                queue.put_nowait,
+                (
+                    "step",
+                    {
+                        "step": record.index,
+                        "tool_calls": [tc["name"] for tc in record.tool_calls],
+                        "text": record.text,
+                        "duration_ms": record.duration_ms,
+                        "violations": len(record.violations),
+                    },
+                ),
+            )
+
+        async def watch():
+            result = await compiled.runtime.run(body.task, tenant=tenant.id, on_step=on_step)
+            return result
+
+        runner = asyncio.create_task(watch())
+
+        # Emitted first so the client has the id before any step arrives, and can
+        # fall back to /traces/{id} if the stream drops.
+        yield _sse("start", {"task": body.task, "agent": compiled.spec.name})
+
+        while True:
+            done, _ = await asyncio.wait(
+                {runner}, timeout=0.05
+            )
+            if runner in done:
+                break
+
+            while not queue.empty():
+                name, payload = queue.get_nowait()
+                yield _sse(name, payload)
+
+        while not queue.empty():
+            name, payload = queue.get_nowait()
+            yield _sse(name, payload)
+
+        result = runner.result()
+
+        yield _sse(
+            "done",
+            {
+                "trace_id": result.trace.id,
+                "status": result.status,
+                "ok": result.ok,
+                "text": result.text,
+                "halt_reason": result.trace.halt_reason,
+                "tokens": result.trace.total_tokens,
+                "violations": [v for s in result.trace.steps for v in s.violations],
+                "warnings": compiled.warnings,
+            },
+        )
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+    )
 
 
 @secure.get("/traces")

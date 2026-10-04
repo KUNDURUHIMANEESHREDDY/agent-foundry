@@ -13,7 +13,7 @@ import asyncio
 import time
 import uuid
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 from factory.capabilities.registry import CapabilityDenied, CapabilityGate
 from factory.models.base import Message, ModelAdapter, ModelResponse
@@ -89,7 +89,26 @@ class AgentRuntime:
         self._store = store
         self._tools = tool_schemas or []
 
-    async def run(self, task: str, *, tenant: str | None = None) -> RunResult:
+    async def run(
+        self,
+        task: str,
+        *,
+        tenant: str | None = None,
+        on_step: Callable[[Any, Any], None] | None = None,
+    ) -> RunResult:
+        """Run the agent to completion.
+
+        `on_step(record, trace)` is called after each *intermediate* step is
+        appended and saved, for a caller that wants to render progress. The
+        terminal step is appended by `_halt` and is not reported through this
+        hook: the final text and status arrive as the run's result instead. A
+        consumer counting steps should expect `len(steps) - 1` callbacks.
+
+        It is an optional presentation channel, not part of the loop's
+        correctness: an exception from it is swallowed, because a UI's progress
+        callback must never be able to fail a run whose trace is being recorded
+        anyway.
+        """
         limits = self._spec.limits
         budget = ContextBudget(
             window=self._spec.model.context_window,
@@ -254,6 +273,16 @@ class AgentRuntime:
             record.duration_ms = int((time.monotonic() - step_started) * 1000)
             trace.steps.append(record)
             self._store.save(trace)
+
+            if on_step is not None:
+                # Progress for a UI. Deliberately after the step is durable, so a
+                # client that reconnects sees the same history the trace holds,
+                # and deliberately defensive: a UI's progress channel must not be
+                # able to break a run whose result is already being recorded.
+                try:
+                    on_step(record, trace)
+                except Exception:  # noqa: BLE001 - a renderer cannot fail a run
+                    pass
 
         return self._halt(
             trace, RunStatus.MAX_STEPS,
