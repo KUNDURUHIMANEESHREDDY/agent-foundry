@@ -244,6 +244,64 @@ def unmet_requirements(suite: Suite) -> list[str]:
     return unmet
 
 
+def live_model_status(specs_dir: Path) -> list[dict[str, object]]:
+    """Which model backends the shipped specs need, and whether they answer.
+
+    P2 -- live-model qualification -- is the one thing this project cannot prove
+    about itself, because it needs a reachable model. That has been reported as a
+    claim; this makes it a command anyone can run and disagree with.
+
+    Reachability is a TCP connect, not a completion: enough to distinguish
+    "nothing is listening" from "something is there", which is the question that
+    gets asked, and cheap enough to never be a reason the answer goes stale.
+    """
+    import socket
+    from urllib.parse import urlparse
+
+    from factory.spec.loader import SpecError, load_spec
+
+    rows: list[dict[str, object]] = []
+    seen: set[tuple[str, str | None]] = set()
+
+    for path in sorted(Path(specs_dir).glob("*.yaml")):
+        try:
+            spec = load_spec(path)
+        except SpecError as exc:
+            rows.append({"spec": path.name, "provider": "?", "base_url": None,
+                         "reachable": False, "detail": f"spec invalid: {exc}"})
+            continue
+
+        base = spec.model.base_url
+        if spec.model.provider == "ollama" and not base:
+            base = "http://localhost:11434"
+
+        key = (spec.model.provider, base)
+        if key in seen:
+            continue
+        seen.add(key)
+
+        detail = ""
+        reachable = False
+        if base:
+            parsed = urlparse(base)
+            host, port = parsed.hostname or "localhost", parsed.port or (
+                443 if parsed.scheme == "https" else 80
+            )
+            try:
+                with socket.create_connection((host, port), timeout=2.0):
+                    reachable = True
+                    detail = f"{host}:{port} accepted a connection"
+            except OSError as exc:
+                detail = f"{host}:{port} unreachable ({exc.__class__.__name__})"
+        else:
+            detail = "no base_url configured"
+
+        rows.append({"spec": path.name, "provider": spec.model.provider,
+                     "base_url": base, "reachable": reachable, "detail": detail})
+
+    return rows
+
+
 async def run_suite(
     suite: Suite, base_dir: Path, use_script: bool = True
 ) -> RunSummary:

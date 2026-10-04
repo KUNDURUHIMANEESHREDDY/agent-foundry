@@ -15,7 +15,7 @@ behind **hardened subprocess execution** â€” env scrubbing, output caps, a 
 process tree. It is *not* a sandbox and never was: arbitrary Python still runs
 with the calling user's OS privileges.
 
-- **976 tests collected**, 3 skipped (symlink checks unavailable on Windows)
+- **998 tests collected**, 3 skipped (symlink checks unavailable on Windows)
 - **55 eval cases** across 5 suites, 55/55 passing, 0 security failures
 - **`factory sabotage`**: 9 mitigations, 9 accounted for, exit 0
 - **`isolation: container` gives `python.execute` real containment** â€” read-only
@@ -1119,10 +1119,31 @@ Every fix here is now covered by a test that goes red when the fix is undone.
   `cloud.langfuse.com` is untested. `verify_langfuse_live.py` now also asserts
   export cardinality and concurrent-run isolation, so a single run with keys
   covers both.
-- **A real model.** No Ollama, and the only reachable provider models return 402.
-  Every behavioural claim about the loop rests on scripted adapters. Finding 1
-  was fixed because a real model would have received a schema telling it
-  `git.commit` takes `path` â€” but that schema has never been sent to one.
+- **A real model.** Every behavioural claim about the loop rests on scripted
+  adapters. Finding 1 was fixed because a real model would have received a schema
+  telling it `git.commit` takes `path` -- but that schema has never been sent to
+  one.
+
+Run `python doctor.py` to check that, plus the container runtime and the Langfuse
+credentials. It prints which backends the shipped specs point at and whether
+anything is listening, so "P2 is blocked" becomes a command's output rather than a
+claim. It deliberately repeats the caveat *especially* when something is
+reachable: an open socket says nothing about whether a model answers usefully,
+and that is exactly when a reader is most likely to read the preflight as a pass.
+
+`factory eval --live` is what proves it. With no model answering, every case halts
+`model_error` and the run exits non-zero -- it does not fall back to scripting.
+Asserted three ways in `tests/test_live_mode_guards.py`, because a qualification
+run that quietly scripted would report 100% and prove nothing, which is worse than
+not running. Making it script turns four of those tests red.
+
+Still missing is the adversarial live suite the review asked for: hallucinated
+tools, malformed arguments, injection under a real model, repeated calls, refusal
+behaviour. It is not written, and the reason is not effort. The eval framework
+asserts exact outcomes, and a real model will not reproduce them, so those cases
+need property-style assertions -- "did it ever call an ungranted tool?" -- which
+is a different kind of check and deserves building deliberately rather than being
+bolted onto a framework built for determinism.
 
 ## Isolation: two levels, not one
 
