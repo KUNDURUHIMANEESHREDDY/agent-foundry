@@ -93,13 +93,25 @@ def docker_executable() -> str:
 
 
 def probe(config: ContainerConfig | None = None, timeout_s: float = 20.0) -> str:
-    """Ask the daemon for its version. Raises if it cannot answer.
+    """Check the runtime can actually run the image, not merely that it is up.
 
     Checking for the executable is not enough: Docker Desktop installs the CLI
     whether or not the engine is running, and the failure then looks like a
     missing-runtime error rather than a stopped daemon.
+
+    Checking the daemon answers is also not enough, and that was a real bug.
+    GitHub's windows-latest runner has a healthy Docker daemon serving Windows
+    containers, so a version probe passed -- and then `python:3.11-slim`, a Linux
+    image, could not run there at all. Every containment case failed with empty
+    output, which reads as broken code rather than an unusable runtime.
+
+    So the probe runs the image. If that fails, this runtime cannot provide the
+    containment, and the right answer is to say so rather than discover it per
+    case.
     """
+    cfg = config or ContainerConfig()
     exe = docker_executable()
+
     try:
         proc = subprocess.run(
             [exe, "version", "--format", "{{.Server.Version}}"],
@@ -121,7 +133,33 @@ def probe(config: ContainerConfig | None = None, timeout_s: float = 20.0) -> str
             + ". Start it, or run this spec at isolation: subprocess -- which is "
             "not a sandbox."
         )
-    return proc.stdout.strip()
+
+    server = proc.stdout.strip()
+
+    # The real question: can it run our image?
+    try:
+        run = subprocess.run(
+            [exe, "run", "--rm", "--network", "none", cfg.image,
+             "python", "-c", "pass"],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise ContainerUnavailable(
+            f"the runtime is up but timed out starting {cfg.image!r}"
+        ) from exc
+
+    if run.returncode != 0:
+        detail = (run.stderr or run.stdout or "").strip().splitlines()
+        raise ContainerUnavailable(
+            f"the runtime cannot run {cfg.image!r}"
+            + (f": {detail[-1][:200]}" if detail else "")
+            + ". A Linux image needs a Linux daemon; a Windows-container host "
+            "will not run one."
+        )
+
+    return server
 
 
 def ensure_image(config: ContainerConfig, timeout_s: float = 300.0) -> None:

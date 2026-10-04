@@ -15,7 +15,7 @@ behind **hardened subprocess execution** — env scrubbing, output caps, a kille
 process tree. It is *not* a sandbox and never was: arbitrary Python still runs
 with the calling user's OS privileges.
 
-- **961 tests collected**, 3 skipped (symlink checks unavailable on Windows)
+- **963 tests collected**, 3 skipped (symlink checks unavailable on Windows)
 - **55 eval cases** across 5 suites, 55/55 passing, 0 security failures
 - **`factory sabotage`**: 9 mitigations, 9 accounted for, exit 0
 - **`isolation: container` gives `python.execute` real containment** — read-only
@@ -1184,8 +1184,23 @@ Silently passing would be worse: CI green, containment untested. So suites decla
 `requires: [container]`, unmet requirements become skips, and a skip makes
 `factory eval` **exit non-zero** — a tool whose job is proving things should not
 report success when a suite proved nothing. Skips are counted separately from
-failures and never render as a 100% pass rate, and CI asserts the containment
-suite ran at all.
+failures and never render as a 100% pass rate, and `--expect-skips` names the one
+exception:
+
+```
+factory eval --suites evals                                  # nothing may skip
+factory eval --suites evals --expect-skips container-isolation   # windows-latest
+```
+
+A suite named there that runs anyway is *also* a failure, so the exception cannot
+widen towards permitting any skip, and cannot drift towards a build that passes
+without containment ever being proven.
+
+`factory sabotage` inherits the coupling: it builds its baseline from these
+suites, so a machine with no container runtime cannot run the audit at all. That
+is worth stating plainly — the audit used to work anywhere and now needs Docker
+up. It is the price of having the containment cases in the baseline rather than
+merely beside it.
 
 ## Where this is safe to use
 

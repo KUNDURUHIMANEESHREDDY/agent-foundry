@@ -189,6 +189,53 @@ class TestContainerRefusesRatherThanDowngrades:
             container.probe()
         assert "not answering" in str(exc.value)
 
+    def test_probe_raises_when_the_image_cannot_run(self, monkeypatch):
+        """A healthy daemon that cannot run the image is still unusable.
+
+        Found on windows-latest: Docker was up serving Windows containers, so a
+        version probe passed, and then the Linux image could not run at all --
+        every containment case failed with empty output, which reads as broken
+        code rather than an absent runtime.
+        """
+
+        class _Proc:
+            def __init__(self, code, out="", err=""):
+                self.returncode = code
+                self.stdout = out
+                self.stderr = err
+
+        def fake_run(argv, **k):
+            if "version" in argv:
+                return _Proc(0, out="29.8.1")
+            return _Proc(
+                125, err="image operating system mismatch: no matching manifest"
+            )
+
+        monkeypatch.setattr(container, "docker_executable", lambda: "docker")
+        monkeypatch.setattr(container.subprocess, "run", fake_run)
+
+        with pytest.raises(container.ContainerUnavailable) as exc:
+            container.probe()
+        assert "cannot run" in str(exc.value)
+        assert "Linux" in str(exc.value), "the error should name the real cause"
+
+    def test_probe_passes_only_when_the_image_actually_runs(self, monkeypatch):
+        class _Proc:
+            def __init__(self, code, out="", err=""):
+                self.returncode = code
+                self.stdout = out
+                self.stderr = err
+
+        def fake_run(argv, **k):
+            if "version" in argv:
+                return _Proc(0, out="29.8.1")
+            return _Proc(0)
+
+        monkeypatch.setattr(container, "docker_executable", lambda: "docker")
+        monkeypatch.setattr(container.subprocess, "run", fake_run)
+
+        assert container.probe() == "29.8.1"
+
     def test_the_error_says_it_is_not_a_sandbox(self, monkeypatch):
         """The message must not leave the reader thinking subprocess is fine."""
 
