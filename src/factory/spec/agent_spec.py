@@ -11,6 +11,8 @@ from typing import Annotated, Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from factory.isolation import Isolation
+
 
 class Priority(str, Enum):
     CRITICAL = "critical"
@@ -78,6 +80,20 @@ class AgentSpec(BaseModel):
 
     capabilities: Annotated[list[str], Field(default_factory=list)] = Field(
         description="Requested capabilities. Resolved to grants; unknown names are rejected.",
+    )
+
+    #: The containment this spec REQUIRES for code execution. A requirement, not
+    #: a preference: if the runtime cannot provide the level, the run is refused
+    #: rather than downgraded. `subprocess` is the default because it is what
+    #: actually runs, and it is not a sandbox.
+    isolation: Isolation = Field(
+        default=Isolation.SUBPROCESS,
+        description=(
+            "Required containment for python.execute. `subprocess` bounds "
+            "execution but does not confine the filesystem or network. "
+            "`container` requires an OS container runtime and fails closed "
+            "without one."
+        ),
     )
 
     model: ModelRef = Field(default_factory=ModelRef)

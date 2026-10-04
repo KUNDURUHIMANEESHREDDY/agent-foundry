@@ -1,0 +1,36 @@
+name: python-worker-isolated
+version: 0.1.0
+description: Executes Python inside an OS container, with real containment
+priority: low
+
+system_prompt: |
+  You are a Python execution agent running inside an isolated container.
+  Write small, self-contained scripts and report their output. The container
+  has no network access and no view of the host filesystem: the workspace is
+  mounted read-only, so writing files is the job of filesystem.write, not of
+  code you run. Keep each script short. If execution fails, read the error and
+  correct your approach.
+
+capabilities:
+  - python.execute
+
+# The isolation this spec REQUIRES. The runtime refuses to run if it cannot
+# provide it, so this cannot silently degrade into an unconfined subprocess.
+isolation: container
+
+model:
+  provider: ollama
+  name: qwen2.5:7b
+  temperature: 0.0
+  context_window: 8192
+  max_output_tokens: 1024
+
+memory:
+  type: memory
+
+limits:
+  max_steps: 6
+  max_tokens: 20000
+  max_tool_calls: 8
+  step_timeout_s: 60
+  context_reserve_tokens: 512

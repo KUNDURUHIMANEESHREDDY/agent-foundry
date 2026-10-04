@@ -105,6 +105,19 @@ class Suite(BaseModel):
     description: str = ""
     cases: list[EvalCase] = Field(min_length=1)
 
+    #: External requirements this suite needs in order to mean anything.
+    #:
+    #: `container` needs a working container runtime. Without it the cases can
+    #: neither pass nor fail -- the capability refuses, so every assertion about
+    #: containment fails for the wrong reason and the baseline goes red.
+    #:
+    #: Going red is worse than skipping, and skipping is worse than passing
+    #: silently. So the cases are skipped and reported, `tests/test_eval.py`
+    #: asserts the requirement is declared, and CI asserts the container suite
+    #: reported zero skips -- a silently-skipped containment suite is a green
+    #: build that tested nothing at all.
+    requires: list[str] = Field(default_factory=list)
+
 
 @dataclass
 class CaseResult:

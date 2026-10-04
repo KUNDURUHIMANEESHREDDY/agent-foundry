@@ -1,0 +1,253 @@
+name: container-isolation
+spec: ../agents/python-worker-isolated.yaml
+description: >
+  Containment that the subprocess level does not provide. The
+  `python-sandbox` suite asserts what a hardened subprocess guarantees and
+  explicitly documents that it is NOT contained against hostile code. This suite
+  asserts the difference is real: at `isolation: container` the code runs in an
+  OS container with no network, no host filesystem, and a read-only workspace.
+
+  These are the cases that make "not a sandbox" stop being true. Each one fails
+  against the subprocess level, which is the point -- `subprocess-*` cases below
+  assert the contrast so a pass here cannot come from the containment being
+  absent altogether.
+
+  Every case here needs a working container runtime. They are skipped, loudly,
+  when one is unavailable rather than quietly passing.
+
+# Without this the cases would fail for the wrong reason (the capability refuses,
+# so every containment assertion fails) and take the baseline red with them.
+requires:
+  - container
+
+cases:
+  # ── filesystem containment ──────────────────────────────────────
+  - id: container-cannot-read-host-filesystem
+    description: >
+      The host filesystem is not mounted, so a file that sits beside the
+      workspace ON THE HOST cannot be read.
+
+      The target is a sibling of the workspace, reached with `..`. On the host
+      that resolves to a real file. Inside the container `/workspace/..` is the
+      container's own root, where the file does not exist.
+
+      Deliberately NOT `/etc/passwd`: a container has its own `/etc/passwd`, so
+      reading it succeeds and proves nothing about host access. The first version
+      of this case used it and would have failed for a reason that had nothing to
+      do with containment.
+    task: "Read the file next to the workspace."
+    scripted:
+      - tool_calls:
+          - name: python.execute
+            arguments:
+              code: |
+                try:
+                    data = open("../python-sandbox.yaml").read()
+                    print("LEAKED", len(data))
+                except Exception as exc:
+                    print(f"BLOCKED: {type(exc).__name__}")
+      - text: "It is not visible."
+    assertions:
+      - check: status_is
+        value: success
+      - check: tool_called
+        value: python.execute
+      - check: output_contains
+        value: "BLOCKED"
+      - check: output_not_contains
+        value: "LEAKED"
+
+  - id: container-cannot-escape-via-deep-traversal
+    description: >
+      Traversal in any direction ends at the container's root, not the host's.
+
+      `/etc/passwd` resolving here is the container's own copy, which is the point:
+      the script is demonstrably inside a container. `/mnt/c` is Docker Desktop's
+      Windows host mount and is absent, because the container was given no mounts
+      beyond the workspace.
+
+      `/root` is asserted as *unreadable* rather than absent. It does exist in
+      python:3.11-slim, but it is mode 700 owned by root, and the container runs
+      as nobody -- so listing it raises. Each probe is wrapped: an uncaught
+      exception would abort the script and make every later assertion vacuous.
+    task: "Probe the filesystem outside the workspace."
+    scripted:
+      - tool_calls:
+          - name: python.execute
+            arguments:
+              code: |
+                import os
+
+                def probe(label, fn):
+                    try:
+                        print(f"{label} {fn()}")
+                    except Exception as exc:
+                        print(f"{label} BLOCKED:{type(exc).__name__}")
+
+                probe("ETC_READS", lambda: len(open("/etc/passwd").read()) > 0)
+                probe("HOST_MOUNT", lambda: os.path.exists("/mnt/c"))
+                probe("ROOT_LIST", lambda: os.listdir("/root"))
+                probe("WHOAMI_UID", lambda: os.getuid())
+      - text: "Contained."
+    assertions:
+      - check: output_contains
+        value: "ETC_READS True"
+      - check: output_contains
+        value: "HOST_MOUNT False"
+      - check: output_contains
+        value: "ROOT_LIST BLOCKED:PermissionError"
+      - check: output_contains
+        value: "WHOAMI_UID 65534"
+
+  - id: container-root-filesystem-is-read-only
+    description: >
+      Only /tmp is writable. Writing anywhere else in the image fails, so executed
+      code cannot tamper with the interpreter it is running under.
+    task: "Write to a location outside the workspace."
+    scripted:
+      - tool_calls:
+          - name: python.execute
+            arguments:
+              code: |
+                for target in ("/etc/injected", "/usr/local/bin/injected"):
+                    try:
+                        open(target, "w").write("x")
+                        print(f"WROTE: {target}")
+                    except Exception as exc:
+                        print(f"BLOCKED {target}: {type(exc).__name__}")
+      - text: "Both were refused."
+    assertions:
+      - check: output_contains
+        value: "BLOCKED /etc/injected"
+      - check: output_contains
+        value: "BLOCKED /usr/local/bin/injected"
+      - check: output_not_contains
+        value: "WROTE:"
+
+  - id: container-tmp-is-writable
+    description: >
+      The read-only root would be unusable if nothing could be written. A small
+      tmpfs is provided, so scripts that genuinely need scratch space still work.
+      Without this, "read-only" would just mean "broken".
+    task: "Write a temporary file."
+    scripted:
+      - tool_calls:
+          - name: python.execute
+            arguments:
+              code: |
+                try:
+                    open("/tmp/scratch.txt", "w").write("ok")
+                    print("TMP_WRITABLE")
+                except Exception as exc:
+                    print(f"BLOCKED: {type(exc).__name__}")
+      - text: "Scratch space works."
+    assertions:
+      - check: output_contains
+        value: "TMP_WRITABLE"
+
+  - id: container-workspace-is-read-only
+    description: >
+      The workspace is mounted read-only, so code run by the agent cannot modify
+      the repository behind `filesystem.write`'s back. Writing is a separate,
+      granted capability; if code could write, that grant would be decorative.
+    task: "Write a file into the workspace."
+    scripted:
+      - tool_calls:
+          - name: python.execute
+            arguments:
+              code: |
+                try:
+                    open("sneaky.txt", "w").write("written by executed code")
+                    print("WROTE: sneaky.txt")
+                except Exception as exc:
+                    print(f"BLOCKED: {type(exc).__name__}")
+      - text: "The workspace is read-only."
+    assertions:
+      - check: output_contains
+        value: "BLOCKED"
+      - check: output_not_contains
+        value: "WROTE:"
+
+  # ── network containment ──────────────────────────────────────────
+  - id: container-has-no-network
+    description: >
+      No egress. A script cannot reach a name server, which is the cheapest
+      proof that the network namespace is genuinely absent rather than filtered.
+    task: "Try to resolve a hostname."
+    scripted:
+      - tool_calls:
+          - name: python.execute
+            arguments:
+              code: |
+                import socket
+                try:
+                    socket.gethostbyname("example.com")
+                    print("RESOLVED")
+                except Exception as exc:
+                    print(f"BLOCKED: {type(exc).__name__}")
+      - text: "There is no network."
+    assertions:
+      - check: output_contains
+        value: "BLOCKED"
+      - check: output_not_contains
+        value: "RESOLVED"
+
+  - id: container-cannot-open-a-tcp-socket
+    description: A raw socket connect fails as well as name resolution.
+    task: "Open a TCP connection to a public address."
+    scripted:
+      - tool_calls:
+          - name: python.execute
+            arguments:
+              code: |
+                import socket
+                try:
+                    socket.create_connection(("1.1.1.1", 443), timeout=3)
+                    print("CONNECTED")
+                except Exception as exc:
+                    print(f"BLOCKED: {type(exc).__name__}")
+      - text: "The socket failed."
+    assertions:
+      - check: output_contains
+        value: "BLOCKED"
+      - check: output_not_contains
+        value: "CONNECTED"
+
+  # ── the containment still works ──────────────────────────────────
+  - id: container-still-runs-python
+    description: >
+      Containment that breaks execution is not containment, it is breakage. The
+      interpreter has to work, or the cases above would pass vacuously because
+      nothing ever ran.
+    task: "Compute 6 times 7 and print the result."
+    scripted:
+      - tool_calls:
+          - name: python.execute
+            arguments:
+              code: "print(6*7)"
+      - text: "The result is 42."
+    assertions:
+      - check: status_is
+        value: success
+      - check: observation_ok
+        value: true
+      - check: output_contains
+        value: "42"
+      - check: no_violations
+
+  - id: container-still-sees-the-workspace
+    description: >
+      The workspace must be readable, or the capability is useless. Proves the
+      read-only mount is a real mount and not an empty one.
+    task: "Read config.yaml from the workspace."
+    scripted:
+      - tool_calls:
+          - name: python.execute
+            arguments:
+              code: |
+                import os
+                print("HAS_CONFIG:", os.path.exists("/workspace/config.yaml"))
+      - text: "Let me check."
+    assertions:
+      - check: output_contains
+        value: "HAS_CONFIG: True"

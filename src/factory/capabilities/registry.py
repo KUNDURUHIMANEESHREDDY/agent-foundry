@@ -9,6 +9,8 @@ nothing, because the gate is downstream of the model.
 
 from __future__ import annotations
 
+from factory import isolation as isolation_module
+
 import os
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable
@@ -278,7 +280,9 @@ class CapabilityGate:
         return [self._registry.instantiate(g).describe() for g in self._grants.values()]
 
 
-def registry_for(workspace: str | Path) -> CapabilityRegistry:
+def registry_for(
+    workspace: str | Path, isolation: object = None
+) -> CapabilityRegistry:
     """Registry with built-in capabilities bound to a workspace root.
 
     `git.commit` is registered only when the workspace is actually a
@@ -291,12 +295,16 @@ def registry_for(workspace: str | Path) -> CapabilityRegistry:
     from factory.capabilities.python_exec import PythonExecute
 
     root = Path(workspace).resolve()
+    # The containment a spec REQUIRES. Passed through to python.execute, which
+    # refuses at run time if the runtime cannot provide it -- fail closed rather
+    # than quietly running unconfined code.
+    level = isolation_module.parse(isolation)
 
     def binder(name: str) -> dict[str, Any]:
         if name in ("filesystem.read", "filesystem.write"):
             return {"root": root}
         if name == "python.execute":
-            return {"workspace": root}
+            return {"workspace": root, "sandbox_level": level.value}
         if name == "git.commit":
             return {"root": root}
         return {}

@@ -56,10 +56,22 @@ def format_text(summaries: list[RunSummary]) -> str:
     lines: list[str] = []
 
     for s in summaries:
-        icon = "PASS" if s.failed == 0 and not s.error else "FAIL"
+        # A suite that skipped everything did not fail and did not pass. Marking
+        # it FAIL overstates it (the code may be fine) and marking it PASS is a
+        # lie, so it gets its own icon.
+        if s.skipped and not s.error:
+            icon = "SKIP"
+        elif s.skipped:
+            icon = "SKIP"
+        else:
+            icon = "PASS" if s.failed == 0 and not s.error else "FAIL"
         lines.append(f"[{icon}] {s.suite}  ({s.spec_name}@{s.spec_version})")
         if s.error:
             lines.append(f"    error: {s.error}")
+            if s.skipped:
+                lines.append(
+                    f"    SKIPPED {s.skipped} case(s) -- they proved nothing"
+                )
             continue
         for r in s.results:
             mark = "  ok  " if r.passed else "  FAIL"
@@ -73,6 +85,9 @@ def format_text(summaries: list[RunSummary]) -> str:
             f"    pass_rate={s.pass_rate:.0%} "
             f"({s.passed}/{s.total}) tokens={s.tokens} violations={s.violations}"
         )
+        if s.skipped:
+            # Never let a skip read as a pass_rate of 100%.
+            lines.append(f"    SKIPPED {s.skipped} case(s): {s.error}")
 
     sec = sum(len(security_failures(s)) for s in summaries)
     total = sum(s.total for s in summaries)

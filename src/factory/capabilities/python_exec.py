@@ -1,28 +1,40 @@
-"""python.execute — a hardened subprocess runner.
+"""python.execute — bounded execution, and (at `container`) real containment.
 
-WHAT THIS IS
-    Isolation from crashes, hangs, output floods, environment leakage, and
-    accidental writes. Execution is bounded and observable.
+TWO LEVELS, NOT ONE
+    `sandbox_level` selects between genuinely different security claims. See
+    `factory.isolation` for what each one means; the short version:
+
+    subprocess   (default) Execution is bounded: timeout, output cap, scrubbed
+                 environment, killed process tree.
+    container    The code runs in an OS container: workspace-only read-only
+                 filesystem, no network namespace, capabilities dropped, no
+                 privilege escalation, non-root, and memory/CPU/pid caps. See
+                 `factory.capabilities.container`.
 
 WHAT THIS IS NOT
-    A security boundary against hostile code. `subprocess` runs as the calling
-    user, so arbitrary Python can read any file that user can read, open sockets,
-    and spawn children. No amount of argument validation fixes that — it is
-    inherent to executing code.
+    At the default `subprocess` level this is not a security boundary against
+    hostile code, and must not be described as one. `subprocess` runs as the
+    calling user, so arbitrary Python can read any file that user can read, open
+    sockets, and spawn children. No amount of argument validation fixes that --
+    it is inherent to executing code.
 
-    If the code is genuinely untrusted, this must be replaced with OS-level
-    isolation: a container, a VM, or a Windows Job Object with network
-    restrictions. See `sandbox_level` on the capability, which records the
-    assumption the caller is making.
+    `isolation: container` closes the filesystem and network gaps and fails
+    closed when no runtime is available. It is still not a VM: someone who
+    already controls this machine is outside its reach.
 
-Mitigations actually enforced here:
+    The level is a requirement declared by the spec. The runtime refuses rather
+    than downgrading, so asking for containment and receiving a subprocess is
+    not a state the code can reach.
+
+Mitigations enforced in both modes:
     - wall-clock timeout, with the whole process tree killed
     - incremental output reading with a hard byte cap (drain-and-discard past
       the cap, so a flood cannot block the child on a full pipe)
     - environment scrubbed to an allowlist, with secret-shaped names denied
     - cwd pinned to the workspace
     - stdin closed, so a script cannot wait on input
-    - POSIX rlimits for CPU, address space, and file size
+    - POSIX rlimits for CPU, address space, and file size (at `subprocess`; at
+      `container` the runtime does the capping, where it actually applies)
 """
 
 from __future__ import annotations
@@ -36,7 +48,9 @@ import time
 from pathlib import Path
 from typing import Any
 
+from factory.capabilities import container
 from factory.capabilities.registry import Capability, object_schema
+from factory.isolation import Isolation, parse as parse_isolation
 
 # Variables a child legitimately needs to run Python at all.
 ENV_ALLOWLIST = (
@@ -226,22 +240,47 @@ class PythonExecute(Capability):
         max_output_bytes: int = DEFAULT_MAX_OUTPUT_BYTES,
         max_wall_s: float = DEFAULT_MAX_WALL_S,
         sandbox_level: str = "subprocess",
+        image: str | None = None,
     ) -> None:
         self._workspace = Path(workspace).resolve()
         self._timeout_s = float(timeout_s)
         self._max_output_bytes = int(max_output_bytes)
         self._max_wall_s = float(max_wall_s)
-        self._sandbox_level = sandbox_level
+        # A bad level is an error, never a fallback to something weaker.
+        self._isolation = parse_isolation(sandbox_level)
+        self._image = image or container.DEFAULT_IMAGE
+        self._container_checked = False
 
     def describe(self) -> str:
         return (
             f"python.execute(workspace={self._workspace}, timeout_s={self._timeout_s}, "
-            f"max_output_bytes={self._max_output_bytes}, sandbox_level={self._sandbox_level})"
+            f"max_output_bytes={self._max_output_bytes}, "
+            f"sandbox_level={self._isolation.value})"
         )
 
     @property
     def sandbox_level(self) -> str:
-        return self._sandbox_level
+        """The level actually in force, for the trace to report."""
+        return self._isolation.value
+
+    @property
+    def isolation(self) -> Isolation:
+        return self._isolation
+
+    def _require_container(self) -> container.ContainerConfig:
+        """Confirm the runtime can honour `container`, or refuse.
+
+        Fails closed. Substituting a bare subprocess for a requested container
+        would produce a run that looks successful and is unconfined, which is the
+        worst possible failure for this capability: silent, and in the direction
+        of less safety.
+        """
+        cfg = container.ContainerConfig(image=self._image)
+        if not self._container_checked:
+            container.probe(cfg)
+            container.ensure_image(cfg)
+            self._container_checked = True
+        return cfg
 
     def invoke(self, code: Any = "", **_: Any) -> dict[str, Any]:
         if not isinstance(code, str):
@@ -258,26 +297,51 @@ class PythonExecute(Capability):
             }
 
         started = time.monotonic()
-        argv = [sys.executable, "-I", "-c", code]
-        popen_kwargs: dict[str, Any] = {
-            "cwd": str(self._workspace),
-            "env": _child_env(),
-            "stdin": subprocess.DEVNULL,
-            "stdout": subprocess.PIPE,
-            "stderr": subprocess.PIPE,
-            "shell": False,
-            "close_fds": True,
-        }
+
+        if self._isolation == Isolation.CONTAINER:
+            try:
+                cfg = self._require_container()
+            except container.ContainerUnavailable as exc:
+                # Refuse. Running it unconfined would contradict the spec.
+                return {
+                    "ok": False,
+                    "error": f"isolation=container unavailable: {exc}",
+                    "capability": self.name,
+                    "sandbox_level": self._isolation.value,
+                }
+            argv = container.build_argv(code, self._workspace, cfg)
+            # The daemon does the resource capping; a local rlimit would only
+            # apply to the CLI, not the container.
+            popen_kwargs: dict[str, Any] = {
+                "cwd": str(self._workspace),
+                "stdin": subprocess.DEVNULL,
+                "stdout": subprocess.PIPE,
+                "stderr": subprocess.PIPE,
+                "shell": False,
+                "close_fds": True,
+            }
+        else:
+            argv = [sys.executable, "-I", "-c", code]
+            popen_kwargs = {
+                "cwd": str(self._workspace),
+                "env": _child_env(),
+                "stdin": subprocess.DEVNULL,
+                "stdout": subprocess.PIPE,
+                "stderr": subprocess.PIPE,
+                "shell": False,
+                "close_fds": True,
+            }
 
         if platform.system() == "Windows":
             popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
         else:
             popen_kwargs["start_new_session"] = True
-            popen_kwargs["preexec_fn"] = _posix_limits(
-                cpu_s=int(self._timeout_s) + 2,
-                mem_bytes=1024 * 1024 * 1024,
-                file_bytes=self._max_output_bytes * 4,
-            )
+            if self._isolation != Isolation.CONTAINER:
+                popen_kwargs["preexec_fn"] = _posix_limits(
+                    cpu_s=int(self._timeout_s) + 2,
+                    mem_bytes=1024 * 1024 * 1024,
+                    file_bytes=self._max_output_bytes * 4,
+                )
 
         try:
             proc = subprocess.Popen(argv, **popen_kwargs)
@@ -323,8 +387,15 @@ class PythonExecute(Capability):
             "truncated": out.truncated or err.truncated,
             "stdout_total_bytes": out.total,
             "stderr_total_bytes": err.total,
-            "sandbox_level": self._sandbox_level,
+            "sandbox_level": self._isolation.value,
         }
+
+        if self._isolation == Isolation.CONTAINER:
+            # Report the containment that was actually in force, so a trace
+            # records the boundary rather than just claiming one.
+            result["containment"] = container.ContainerConfig(
+                image=self._image
+            ).describe()
 
         if timed_out:
             result["error"] = (

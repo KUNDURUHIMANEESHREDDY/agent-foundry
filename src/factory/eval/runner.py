@@ -103,6 +103,10 @@ class RunSummary:
     total: int = 0
     passed: int = 0
     failed: int = 0
+    #: Cases not run because the environment lacked a declared requirement.
+    #: Reported separately from `failed`, because a skip is not a pass and is
+    #: not a failure either -- it is an absence of evidence.
+    skipped: int = 0
     tokens: int = 0
     duration_ms: int = 0
     violations: int = 0
@@ -121,6 +125,7 @@ class RunSummary:
             "total": self.total,
             "passed": self.passed,
             "failed": self.failed,
+            "skipped": self.skipped,
             "pass_rate": round(self.pass_rate, 3),
             "tokens": self.tokens,
             "duration_ms": self.duration_ms,
@@ -159,7 +164,10 @@ async def run_case(
 
     try:
         compiled = compile_agent(
-            spec, registry_for(workspace), workspace=workspace, model=model
+            spec,
+            registry_for(workspace, spec.isolation),
+            workspace=workspace,
+            model=model,
         )
     except CompileError as exc:
         return CaseResult(case.id, False, [f"compile failed: {exc}"])
@@ -210,12 +218,49 @@ async def run_case(
     return evaluated
 
 
+def unmet_requirements(suite: Suite) -> list[str]:
+    """External requirements this suite declares that the environment lacks.
+
+    Kept separate from the run so it can be checked without running anything,
+    and so a test can assert the declaration exists at all.
+
+    A requirement this function does not recognise is reported as unmet. Treating
+    it as satisfied would disable the gate exactly when someone has mistyped
+    `contaienr` -- the case where skipping quietly becomes the default.
+    """
+    unmet: list[str] = []
+
+    for requirement in suite.requires:
+        if requirement == "container":
+            from factory.capabilities import container
+
+            try:
+                container.probe()
+            except container.ContainerUnavailable:
+                unmet.append(requirement)
+        else:
+            unmet.append(requirement)
+
+    return unmet
+
+
 async def run_suite(
     suite: Suite, base_dir: Path, use_script: bool = True
 ) -> RunSummary:
     spec_path = base_dir / suite.spec
     workspace = base_dir / "workspace"
     temp_workspace: Path | None = None
+
+    unmet = unmet_requirements(suite)
+    if unmet:
+        # Reported, not silently dropped. A suite whose runtime is missing has
+        # proved nothing; the caller decides whether that is acceptable, and CI
+        # asserts it is not.
+        return RunSummary(
+            suite.name, "?", "?",
+            skipped=len(suite.cases),
+            error=f"requirements not met: {', '.join(unmet)}",
+        )
 
     try:
         spec = load_spec(spec_path)

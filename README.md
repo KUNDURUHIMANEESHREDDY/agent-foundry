@@ -15,9 +15,12 @@ behind **hardened subprocess execution** — env scrubbing, output caps, a kille
 process tree. It is *not* a sandbox and never was: arbitrary Python still runs
 with the calling user's OS privileges.
 
-- **857 tests collected**, 3 skipped (symlink checks unavailable on Windows)
-- **44 eval cases** across 3 suites, 44/44 passing, 0 security failures
+- **948 tests collected**, 3 skipped (symlink checks unavailable on Windows)
+- **55 eval cases** across 5 suites, 55/55 passing, 0 security failures
 - **`factory sabotage`**: 9 mitigations, 9 accounted for, exit 0
+- **`isolation: container` gives `python.execute` real containment** — read-only
+  workspace mount, no network, capabilities dropped, non-root, resource caps, and
+  a refusal when no runtime is available rather than a silent downgrade
 - **API is authenticated and workspace-confined** — the client cannot choose the
   capability root or where traces are written; only `/health` is public
 - **API traces are observable**: `/run` -> `trace_id` -> `/traces/{id}`
@@ -1121,12 +1124,74 @@ Every fix here is now covered by a test that goes red when the fix is undone.
   was fixed because a real model would have received a schema telling it
   `git.commit` takes `path` — but that schema has never been sent to one.
 
+## Isolation: two levels, not one
+
+`sandbox_level` used to be a string that was recorded in the trace and never
+checked: a flag that did nothing, the same defect class as `CompiledAgent.denied`.
+It is now an ordered, enforced requirement that a spec declares.
+
+| Level | Filesystem | Network | Process | Notes |
+|---|---|---|---|---|
+| `subprocess` (default) | **not confined** | **not confined** | bounded | Runs as the calling user. Not a sandbox. |
+| `container` | workspace only, read-only | none | container-bounded | Requires a runtime. Fails closed. |
+
+A spec declares what it *requires*:
+
+```yaml
+isolation: container      # refused, not downgraded, if no runtime is available
+```
+
+**Fail-closed is the whole point.** If Docker is installed but not running, the
+capability refuses and says so. It never falls back to a subprocess, because a
+silent downgrade from `container` to `subprocess` produces a successful run of
+unconfined code with nothing anywhere indicating a problem.
+
+What `container` enforces, asserted on the argv in `tests/test_isolation.py` and
+by running real containers in `evals/container-isolation.yaml`:
+
+- `--network none`, so there is nothing to allow or deny
+- the workspace mounted **read only**, and it is the only mount
+- the container's own root filesystem read-only, with a small writable tmpfs
+- `--cap-drop ALL` and `--security-opt no-new-privileges`
+- runs as uid 65534, not root
+- `--memory`, `--cpus` and `--pids-limit`
+- no inherited environment: only an explicit `PATH`/`HOME`
+- `--rm`, so nothing is left behind
+
+The read-only workspace is a decision, not a default. Writing files is
+`filesystem.write`'s job and it is a granted, audited capability. If executed
+code could also write, the write boundary would only be as strong as the model's
+discretion, and `filesystem.write` would be decorative.
+
+**A container is not a VM.** Someone who already controls the machine is outside
+its reach. It is materially stronger than a subprocess, and that is the entire
+claim.
+
+### Two traps worth naming
+
+**Comparing isolation levels by string.** `Isolation` subclasses `str`, and
+`functools.total_ordering` only fills in operators that are *absent*: it looks
+for them with `getattr`, which finds the ones inherited from `str`. So
+`SUBPROCESS >= CONTAINER` fell through to string comparison, where
+`"subprocess" >= "container"` is True, and `confines_filesystem` returned True
+for the level that confines nothing. Defining all four operators directly means no
+comparison can leak to the string value.
+
+**Skipping containment cases silently.** `container-isolation` needs a container
+runtime. Without one the capability refuses, so every containment assertion fails
+for the wrong reason and the baseline goes red on a machine that is fine.
+Silently passing would be worse: CI green, containment untested. So suites declare
+`requires: [container]`, unmet requirements are reported as skips, and **CI
+asserts zero skips** where the runtime is known to exist.
+
 ## Where this is safe to use
 
-`python.execute` has **no containment**. The capability gate, the workspace
-confinement and the tenant scoping are real and tested — but they bound what a
-*correct* agent does, not what *arbitrary Python* can do once the interpreter is
-already running. That capability gets the calling user's OS privileges.
+At the default `subprocess` level `python.execute` has **no containment** and is
+**not a sandbox**. The capability gate, workspace confinement and tenant scoping
+are real and tested, but they bound what a *correct* agent does, not what
+*arbitrary Python* can do once the interpreter is already running. Ask for
+`isolation: container` and the filesystem and network are contained; see
+[Isolation](#isolation-two-levels-not-one).
 
 So here is the supported set, stated rather than left to be inferred:
 
@@ -1135,9 +1200,9 @@ So here is the supported set, stated rather than left to be inferred:
 | A trusted developer's own repository | Supported | Both the model and the code are yours |
 | Controlled internal automation | Supported | Inputs are bounded by you, not by a third party |
 | CI running this repo's own evals | Supported | No untrusted code reaches an interpreter |
-| Untrusted or user-supplied code execution | **Not supported** | No filesystem or network containment |
-| Internet-exposed, multi-tenant execution | **Not supported** | The above, and the API is not hardened for hostile traffic |
-| Anywhere a sandbox is the control being relied on | **Not supported** | `python.execute` is subprocess hardening, not isolation |
+| Untrusted or user-supplied code execution | Supported at `isolation: container` | Filesystem and network are contained; see the caveats above |
+| Internet-exposed, multi-tenant execution | **Not supported** | The API is not hardened for hostile traffic |
+| Anything relying on a VM-grade boundary | **Not supported** | A container is not a VM |
 
 "Supported" means the security claims on this page are tested and sabotaged. It
 does **not** mean this is production-audited software, and two things stay

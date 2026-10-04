@@ -40,6 +40,25 @@ jobs:
       - name: Eval suites
         run: factory eval --suites evals
 
+      - name: Containment cases actually ran
+        # A suite whose external runtime is missing is skipped, not failed, so
+        # the run stays green on a machine without Docker. That is right locally
+        # and wrong here: these runners have a container runtime, so a skip means
+        # the containment claims were never tested and the build says nothing.
+        shell: bash
+        run: |
+          factory eval --suites evals --json > eval.json
+          python - <<'PY'
+          import json, sys
+          data = json.load(open("eval.json", encoding="utf-8"))
+          skipped = sum(s.get("skipped", 0) for s in data)
+          if skipped:
+              names = [s["suite"] for s in data if s.get("skipped")]
+              sys.exit(f"{skipped} eval case(s) skipped in {names}: "
+                       f"containment was not tested")
+          print("every containment case ran")
+          PY
+
   # The suite passing is not evidence that the suite works. This job breaks one
   # mitigation at a time and fails if the suite does not notice.
   sabotage:

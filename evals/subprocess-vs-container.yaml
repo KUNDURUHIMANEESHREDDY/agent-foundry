@@ -1,0 +1,68 @@
+name: subprocess-vs-container
+spec: ../agents/python-worker.yaml
+description: >
+  The contrast that stops the container suite passing vacuously.
+
+  `container-isolation` asserts that code at `isolation: container` cannot read
+  the host, open a socket, or write the workspace. Every one of those would also
+  "pass" if execution were silently failing and nothing ever ran. These cases run
+  the SAME code at the `subprocess` level, where containment is documented as
+  absent, and assert that it genuinely succeeds.
+
+  If these ever start failing because the subprocess level got stricter, the
+  container suite's claims have stopped meaning what they said.
+
+cases:
+  - id: subprocess-can-read-etc-passwd
+    description: >
+      No containment. A subprocess runs as the calling user and reads /etc/passwd.
+      On Windows that path does not exist, so the case asserts the weaker,
+      portable claim instead: a file outside the workspace is readable.
+    task: "Read a file outside the workspace."
+    scripted:
+      - tool_calls:
+          - name: python.execute
+            arguments:
+              code: |
+                import os
+                target = "/etc/passwd" if os.path.exists("/etc/passwd") else "C:/Windows/win.ini"
+                try:
+                    data = open(target).read()
+                    print("READ_OK", len(data))
+                except Exception as exc:
+                    print("READ_FAIL", exc)
+      - text: "Read it."
+    assertions:
+      - check: output_contains
+        value: "READ_OK"
+
+  - id: subprocess-can-write-the-workspace
+    description: >
+      The workspace is writable at this level. If this ever stops being true, the
+      container suite's read-only assertion is no longer a difference.
+
+      The script removes its own file. This suite uses the shared
+      `evals/workspace` fixture, and leaving a stray file in a tracked directory
+      makes `tests/test_packaging.py` report an untracked artefact on every run
+      afterwards -- which is a test failing for a reason that has nothing to do
+      with the code under test.
+    task: "Write a file into the workspace."
+    scripted:
+      - tool_calls:
+          - name: python.execute
+            arguments:
+              code: |
+                import os
+                target = "subprocess-wrote-this.txt"
+                try:
+                    open(target, "w").write("ok")
+                    print("WROTE_OK", os.path.exists(target))
+                except Exception as exc:
+                    print("WROTE_FAIL", exc)
+                finally:
+                    if os.path.exists(target):
+                        os.unlink(target)
+      - text: "Written."
+    assertions:
+      - check: output_contains
+        value: "WROTE_OK True"

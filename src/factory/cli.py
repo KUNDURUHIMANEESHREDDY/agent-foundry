@@ -132,7 +132,39 @@ def cmd_eval(args: argparse.Namespace) -> int:
         print(compare(baseline, summaries))
 
     sec = sum(len(security_failures(s)) for s in summaries)
-    return 1 if sec or any(s.failed for s in summaries) else 0
+    broken = [s for s in summaries if s.failed]
+
+    # A suite that could not run is not a suite that passed.
+    #
+    # Found by accident while adding an isolation suite: its spec had a field
+    # the schema did not accept, so `run_suite` returned a summary carrying an
+    # error and zero cases. `s.failed` was 0, the total read "46/46, 0 security
+    # assertion failures", and the process exited 0 -- a suite that ran nothing
+    # reported as a clean run, and CI would have stayed green.
+    #
+    # A summary with an error has no passing cases behind it, so it cannot be
+    # evidence of anything. Reported separately from case failures because the
+    # diagnosis is different: this is a broken suite definition, not a regression.
+    unloadable = [s for s in summaries if s.error]
+
+    if unloadable:
+        print(
+            "\nBLOCKED: "
+            + ", ".join(f"{s.suite} ({s.error.splitlines()[0]})" for s in unloadable)
+            + "\nThese suites ran no cases. That is not a pass."
+        )
+
+    # A skipped suite is not a failure -- it is an absence of evidence, and the
+    # environment may legitimately lack the runtime. It is reported so a human
+    # sees it, and CI asserts zero skips where it knows the runtime exists.
+    skipped_total = sum(s.skipped for s in summaries)
+    if skipped_total:
+        print(
+            f"\nWARNING: {skipped_total} eval case(s) were SKIPPED for want of an "
+            f"external runtime. They proved nothing. CI asserts these ran."
+        )
+
+    return 1 if sec or broken or unloadable else 0
 
 
 def cmd_sabotage(args: argparse.Namespace) -> int:

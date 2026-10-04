@@ -276,7 +276,10 @@ def _compile(
     try:
         compiled = compile_agent(
             spec,
-            registry_for(workspace),
+            # The spec's required containment. A tenant asking for `container`
+            # gets refused if there is no runtime, rather than silently getting
+            # an unconfined subprocess.
+            registry_for(workspace, spec.isolation),
             workspace=workspace,
             model=model,
             # Server-owned persistence. Without this the run is traced into a
