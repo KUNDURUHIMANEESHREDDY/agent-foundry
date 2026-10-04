@@ -15,7 +15,7 @@ behind **hardened subprocess execution** — env scrubbing, output caps, a kille
 process tree. It is *not* a sandbox and never was: arbitrary Python still runs
 with the calling user's OS privileges.
 
-- **851 tests collected**, 3 skipped (symlink checks unavailable on Windows)
+- **857 tests collected**, 3 skipped (symlink checks unavailable on Windows)
 - **44 eval cases** across 3 suites, 44/44 passing, 0 security failures
 - **`factory sabotage`**: 9 mitigations, 9 accounted for, exit 0
 - **API is authenticated and workspace-confined** — the client cannot choose the
@@ -1120,6 +1120,29 @@ Every fix here is now covered by a test that goes red when the fix is undone.
   Every behavioural claim about the loop rests on scripted adapters. Finding 1
   was fixed because a real model would have received a schema telling it
   `git.commit` takes `path` — but that schema has never been sent to one.
+
+## Where this is safe to use
+
+`python.execute` has **no containment**. The capability gate, the workspace
+confinement and the tenant scoping are real and tested — but they bound what a
+*correct* agent does, not what *arbitrary Python* can do once the interpreter is
+already running. That capability gets the calling user's OS privileges.
+
+So here is the supported set, stated rather than left to be inferred:
+
+| Deployment | Verdict | Why |
+|---|---|---|
+| A trusted developer's own repository | Supported | Both the model and the code are yours |
+| Controlled internal automation | Supported | Inputs are bounded by you, not by a third party |
+| CI running this repo's own evals | Supported | No untrusted code reaches an interpreter |
+| Untrusted or user-supplied code execution | **Not supported** | No filesystem or network containment |
+| Internet-exposed, multi-tenant execution | **Not supported** | The above, and the API is not hardened for hostile traffic |
+| Anywhere a sandbox is the control being relied on | **Not supported** | `python.execute` is subprocess hardening, not isolation |
+
+"Supported" means the security claims on this page are tested and sabotaged. It
+does **not** mean this is production-audited software, and two things stay
+unverified in every environment: behaviour under a real model, and the live
+Langfuse round trip. See [Still unverified](#still-unverified).
 
 ## What is deliberately not here
 

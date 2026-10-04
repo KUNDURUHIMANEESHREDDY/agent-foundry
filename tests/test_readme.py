@@ -276,6 +276,50 @@ class TestStatusBlockDoesNotClaimWhatIsUnverified:
         )
 
 
+class TestTheDeploymentPostureIsStated:
+    """An external review's central objection: this must not be *marketed* as a
+    sandbox. The honesty was scattered across the README, so a reader had to
+    assemble it. It is now one table, and it has to stay a table.
+
+    The failure these guard against is a document that lists only what works.
+    That was the actual defect in the Status block: a list of strengths with the
+    qualifications forty lines below and not in the list at all.
+    """
+
+    def _section(self) -> str:
+        text = README.read_text(encoding="utf-8")
+        start = text.index("## Where this is safe to use")
+        rest = text[start + len("## Where this is safe to use"):]
+        end = rest.find("\n## ")
+        return rest[:end] if end != -1 else rest
+
+    def test_the_section_exists(self):
+        assert "## Where this is safe to use" in README.read_text(encoding="utf-8")
+
+    def test_it_has_a_verdict_table(self):
+        assert "| Deployment | Verdict |" in self._section()
+
+    def test_it_refuses_at_least_one_deployment(self):
+        """A table where everything is supported is marketing."""
+        section = self._section()
+        assert "Not supported" in section, (
+            "the deployment table lists no unsupported case, so it reads as an "
+            "endorsement rather than a boundary"
+        )
+
+    def test_it_names_untrusted_code_execution(self):
+        section = self._section().lower()
+        assert "untrusted" in section and "user-supplied" in section
+
+    def test_it_says_supported_is_not_production_readiness(self):
+        section = self._section().lower()
+        assert "production" in section and "supported" in section
+
+    def test_it_does_not_call_the_project_a_sandbox(self):
+        section = self._section().lower()
+        assert "not isolation" in section or "not a sandbox" in section
+
+
 def _stated_count(text: str, pattern: str) -> str | None:
     match = re.search(pattern, text)
     if not match:
