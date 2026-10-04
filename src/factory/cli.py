@@ -165,7 +165,14 @@ def cmd_eval(args: argparse.Namespace) -> int:
         for name in (getattr(args, "expect_skips", "") or "").split(",")
         if name.strip()
     }
-    unexpected_skips = [s for s in unloadable if s.suite not in allowed_skips]
+    # Only a *skip* is excusable: a suite that could not run because this
+    # environment lacks a runtime. A suite whose spec does not parse is a defect
+    # in this repository, and matching it by name would let a typo in
+    # --expect-skips switch a broken suite off permanently.
+    excusable = {
+        s.suite for s in unloadable if s.skipped > 0 and s.suite in allowed_skips
+    }
+    unexpected_skips = [s for s in unloadable if s.suite not in excusable]
 
     if unexpected_skips:
         print(

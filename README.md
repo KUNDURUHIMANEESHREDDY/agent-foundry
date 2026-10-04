@@ -1,34 +1,34 @@
 # Agent Factory
 
-Compile declarative agent specs into sandboxed, traceable, runnable agents —
+Compile declarative agent specs into sandboxed, traceable, runnable agents â€”
 and prove it with an eval harness that fails loudly when the boundary breaks.
 
 The unit of work is a **spec**, not a prompt. A spec is validated, resolved
 against a capability registry, compiled into a runtime config, and only then
-executed. The interesting property is not the UI — it is that **a capability the
+executed. The interesting property is not the UI â€” it is that **a capability the
 spec did not request cannot be reached, regardless of what the model says.**
 
 ## Status
 
-Milestones 1–3 complete: spec + runtime, eval harness, and `python.execute`
-behind **hardened subprocess execution** — env scrubbing, output caps, a killed
+Milestones 1â€“3 complete: spec + runtime, eval harness, and `python.execute`
+behind **hardened subprocess execution** â€” env scrubbing, output caps, a killed
 process tree. It is *not* a sandbox and never was: arbitrary Python still runs
 with the calling user's OS privileges.
 
-- **964 tests collected**, 3 skipped (symlink checks unavailable on Windows)
+- **976 tests collected**, 3 skipped (symlink checks unavailable on Windows)
 - **55 eval cases** across 5 suites, 55/55 passing, 0 security failures
 - **`factory sabotage`**: 9 mitigations, 9 accounted for, exit 0
-- **`isolation: container` gives `python.execute` real containment** — read-only
+- **`isolation: container` gives `python.execute` real containment** â€” read-only
   workspace mount, no network, capabilities dropped, non-root, resource caps, and
   a refusal when no runtime is available rather than a silent downgrade
-- **API is authenticated and workspace-confined** — the client cannot choose the
+- **API is authenticated and workspace-confined** â€” the client cannot choose the
   capability root or where traces are written; only `/health` is public
 - **API traces are observable**: `/run` -> `trace_id` -> `/traces/{id}`
-- **One run, one Langfuse export** — no cumulative duplicates
-- **Concurrent runs keep their own trace** — verified with 8 simultaneous runs
-- **A hanging model cannot hang the run** — per-call deadline, distinct status
-- **API state is per-app** — two apps over two dependency sets, no globals
-- **Tenants scope capabilities, traces and specs** — a refused capability is
+- **One run, one Langfuse export** â€” no cumulative duplicates
+- **Concurrent runs keep their own trace** â€” verified with 8 simultaneous runs
+- **A hanging model cannot hang the run** â€” per-call deadline, distinct status
+- **API state is per-app** â€” two apps over two dependency sets, no globals
+- **Tenants scope capabilities, traces and specs** â€” a refused capability is
   never silently downgraded
 - No model server required to test the loop, gating, truncation, or failure paths
 
@@ -83,7 +83,7 @@ pytest -q
 
 ## Langfuse observability
 
-Traces runs and model calls to Langfuse. Additive — the runtime and compiler
+Traces runs and model calls to Langfuse. Additive â€” the runtime and compiler
 are unchanged.
 
 ```bash
@@ -114,7 +114,7 @@ obs.store.score(result.trace.id, "eval_pass_rate", 1.0, "31/31")
 
 `LangfuseObservability` is the entry point, not the two classes separately. The
 store learns the active run id via `TraceStore.begin_run`, and the model adapter
-reads it from the same slot — so generations nest **under** the run. Using the
+reads it from the same slot â€” so generations nest **under** the run. Using the
 two classes independently still traces everything, but as separate traces.
 
 | Run | Becomes |
@@ -135,11 +135,11 @@ Found by running against the real SDK, not by reading the docs:
    tracer provider. Killing it via `shutdown()` means a later client's spans
    queue forever and `flush()` blocks in `queue.join()`. The test suite uses one
    session-scoped client and clears spans between tests instead.
-3. **Metadata is flattened**, not a JSON blob — keys become
+3. **Metadata is flattened**, not a JSON blob â€” keys become
    `langfuse.observation.metadata.<key>`. Reading
    `langfuse.observation.metadata` returns `None`.
 4. **`usage_details` is dropped on non-generations.** A `span` silently loses
-   token counts, so steps are exported as `generation` — which is also accurate,
+   token counts, so steps are exported as `generation` â€” which is also accurate,
    since a step is one model call.
 
 Also: Langfuse's display ids (`observation.trace_id`) and OTel span ids are
@@ -151,7 +151,7 @@ different id spaces. Nesting must be asserted against `span.parent.span_id`.
 exercises the whole path: `auth_check()`, a real agent run, `flush()`, reading
 the observations back through the API, attaching a score and reading it back,
 and a violation run. It confirms 11 observations land on a single trace with the
-expected types — `AGENT factory.run:reader`, `GENERATION model.complete`,
+expected types â€” `AGENT factory.run:reader`, `GENERATION model.complete`,
 `GENERATION step-N`, `TOOL filesystem.read`, `SPAN run.result`.
 
 **Also verified offline** via the SDK's `span_exporter` hook, so the
@@ -164,7 +164,7 @@ Two further API-shape findings from the live org, both recorded in
 
 - `api.trace.get` and `api.scores.get_many` return **410** on organisations
   created after 2026-09-16. Reading requires
-  `api.observations.get_many` and `api.scores_v3.get_many_v3` — exposed as
+  `api.observations.get_many` and `api.scores_v3.get_many_v3` â€” exposed as
   `store.read_observations()` and `store.read_scores()`.
 - Those two endpoints use **inconsistent time-parameter names**
   (`from_start_time` vs `from_timestamp`). Passing the wrong one raises
@@ -210,7 +210,7 @@ agent, and a tool error becoming an observation instead of a crash.
 
 Cases run against a **scripted adapter** by default, so the harness is provable
 without a model server. Scripted cases exercise the runtime and the boundary,
-not model judgement — `--live` is the untested path until Ollama exists.
+not model judgement â€” `--live` is the untested path until Ollama exists.
 
 ## The sabotage audit
 
@@ -244,7 +244,7 @@ must never be assumed:
 | Verdict | Meaning |
 |---|---|
 | `DETECTED` | the cases claiming this mitigation went red |
-| `MISSED` | a case claiming it still passed — a false green |
+| `MISSED` | a case claiming it still passed â€” a false green |
 | `UNCOVERED` | nothing verifies this mitigation at all |
 | `GUARDED elsewhere` | a unit test verifies it; no black-box case can exist |
 | `HANG` | the sabotage left no case able to reach an assertion |
@@ -261,7 +261,7 @@ the project, and every case runs in its own subprocess inside it. This is not
 decoration:
 
 - The first version patched live source. A run interrupted mid-audit leaked a
-  sabotage into `capabilities/registry.py` — the tool corrupted the exact thing
+  sabotage into `capabilities/registry.py` â€” the tool corrupted the exact thing
   it exists to check.
 - Patching a `.py` does nothing to an already-imported module, so an in-process
   audit reports every sabotage as undetected. A subprocess makes that impossible.
@@ -288,7 +288,7 @@ removed:
   `output_under_bytes`.
 - **`refuses-commit-path-escape`** asserted only `observation_denied`, which any
   refusal satisfies. With confinement removed the escape was caught a moment
-  later by "no such path" — a refusal, so the case passed. It now asserts
+  later by "no such path" â€” a refusal, so the case passed. It now asserts
   `path_denied('outside the workspace root')`. The sibling write case was
   tightened the same way.
 
@@ -312,17 +312,17 @@ it, so the audit says so instead of claiming credit.
 Writing and committing change real-world state, so both are narrower than they
 first look.
 
-**`filesystem.write`** — root pinned at grant time, every path through
+**`filesystem.write`** â€” root pinned at grant time, every path through
 `safe_join`, and:
 
 - an existing file needs an explicit `overwrite=true` (or an
   `allow_overwrite` grant), so a read-then-write loop cannot silently clobber data
-- writes are atomic — temp file plus `os.replace`, so a crash mid-write leaves
+- writes are atomic â€” temp file plus `os.replace`, so a crash mid-write leaves
   the original intact rather than a truncated file. Tested by making `os.replace`
   fail.
 - size capped at 512KB, because an agent loop can fill a disk in one step
 
-**`git.commit`** — commits locally, in a repo pinned at grant time:
+**`git.commit`** â€” commits locally, in a repo pinned at grant time:
 
 | Refused | Why |
 |---|---|
@@ -349,12 +349,12 @@ requesting it fails at compile time rather than run time.
 
 `evals/coder-side-effects.yaml` covers what must *not* happen: traversal on
 write, absolute paths, oversized writes, `root` rebinding, empty commits,
-missing messages, path escapes from the repo. Plus the write→read round trip,
+missing messages, path escapes from the repo. Plus the writeâ†’read round trip,
 and a write/commit loop that halts at `max_steps` rather than spinning.
 
 Suites using `git.commit` get a **temporary git repo**, seeded from the shared
 fixture and thrown away afterwards. The shared read-only workspace is not a
-repository, so `git.commit` could not be granted there at all — a capability that
+repository, so `git.commit` could not be granted there at all â€” a capability that
 silently disappears is worse than a setup failure.
 
 Large-payload cases use `${gen:600000}` rather than pasting half a megabyte into
@@ -363,7 +363,7 @@ accidentally pass a 512KB-cap test.
 
 ## python.execute
 
-Runs Python in a bounded subprocess. **Write the eval cases first** — that is
+Runs Python in a bounded subprocess. **Write the eval cases first** â€” that is
 how this was built, and the discipline paid for itself (see below).
 
 Enforced mitigations:
@@ -395,7 +395,7 @@ real containment, both tests fail loudly so the claim can be updated.
 The first version of `kills-process-tree-on-timeout` passed **with the tree kill
 removed**. Two separate reasons, both worth recording:
 
-1. The case spawned no grandchild — `proc.kill()` alone sufficed, so the tree
+1. The case spawned no grandchild â€” `proc.kill()` alone sufficed, so the tree
    kill was never exercised. Now it spawns one that appends to a marker file,
    and `grandchild_stopped` watches that file stop growing.
 2. The child script was
@@ -418,7 +418,7 @@ when a survivor held the file. Cleanup now reports that as a failure rather
 than aborting the run.
 
 `python -m pytest tests/test_python_exec.py` covers the parts the eval cannot
-reach deterministically — marker-stripping of allowlisted secret names, flood
+reach deterministically â€” marker-stripping of allowlisted secret names, flood
 deadlock avoidance, and the tree-kill test with unique markers per run so a
 leaked orphan can never contaminate the next one.
 
@@ -426,20 +426,20 @@ leaked orphan can never contaminate the next one.
 
 ```
 AgentSpec (YAML)
-      │
-      ▼
- Validator ────────── structural rules Pydantic cannot express
-      │
-      ▼
- CapabilityResolver ── requested capabilities → grants
-      │                unknown name = hard error, not a warning
-      ▼
- PromptCompiler ────── assembles the system prompt from grants + workspace
-      │
-      ▼
- RuntimeConfig ─────── AgentRuntime + CapabilityGate + adapter + trace store
-      │
-      ▼
+      â”‚
+      â–¼
+ Validator â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ structural rules Pydantic cannot express
+      â”‚
+      â–¼
+ CapabilityResolver â”€â”€ requested capabilities â†’ grants
+      â”‚                unknown name = hard error, not a warning
+      â–¼
+ PromptCompiler â”€â”€â”€â”€â”€â”€ assembles the system prompt from grants + workspace
+      â”‚
+      â–¼
+ RuntimeConfig â”€â”€â”€â”€â”€â”€â”€ AgentRuntime + CapabilityGate + adapter + trace store
+      â”‚
+      â–¼
  Executable agent
 ```
 
@@ -451,14 +451,14 @@ This is the part worth reading twice.
 
 A spec's `capabilities:` list is a **request**, not a permission. Grants are
 minted by the registry, and enforcement happens in `CapabilityGate`, which is
-consulted on **every single tool call** — after the model has spoken, not when
+consulted on **every single tool call** â€” after the model has spoken, not when
 tools were advertised.
 
 Three properties, each with a test:
 
 | Property | Mechanism |
 |---|---|
-| Ungranted capability cannot run | `CapabilityGate.check()` on every call → `CapabilityDenied` |
+| Ungranted capability cannot run | `CapabilityGate.check()` on every call â†’ `CapabilityDenied` |
 | Pinned params cannot be rebound | `sanitize_arguments()` strips them, records a violation |
 | Paths cannot escape the workspace | `safe_join()` resolves the real path, so symlinks fail too |
 
@@ -509,21 +509,21 @@ in the trace.
 
 ```
 src/factory/
-├── spec/          AgentSpec (Pydantic), YAML loader
-├── compiler/      validate → resolve → compile prompt → runtime config
-├── capabilities/  registry, grants, gate, filesystem r/w, python.exec, git.commit
-├── runtime/       the loop, context truncation, SQLite traces
-├── models/        ModelAdapter protocol, Ollama, OpenAI-compat, fakes
-├── registry/      AgentRegistry: addressable specs, versions, diff
-├── tracing/       Langfuse: observability facade, model adapter, trace store
-├── eval/          cases, assertions, runner, baseline comparison
-└── api/           FastAPI surface
+â”œâ”€â”€ spec/          AgentSpec (Pydantic), YAML loader
+â”œâ”€â”€ compiler/      validate â†’ resolve â†’ compile prompt â†’ runtime config
+â”œâ”€â”€ capabilities/  registry, grants, gate, filesystem r/w, python.exec, git.commit
+â”œâ”€â”€ runtime/       the loop, context truncation, SQLite traces
+â”œâ”€â”€ models/        ModelAdapter protocol, Ollama, OpenAI-compat, fakes
+â”œâ”€â”€ registry/      AgentRegistry: addressable specs, versions, diff
+â”œâ”€â”€ tracing/       Langfuse: observability facade, model adapter, trace store
+â”œâ”€â”€ eval/          cases, assertions, runner, baseline comparison
+â””â”€â”€ api/           FastAPI surface
 
 evals/
-├── reader-boundary.yaml     12 cases — read boundary, prompt injection
-├── python-sandbox.yaml      19 cases — subprocess isolation
-├── coder-side-effects.yaml  13 cases — write + commit refusals
-└── workspace/               fixture the agent is entitled to read
+â”œâ”€â”€ reader-boundary.yaml     12 cases â€” read boundary, prompt injection
+â”œâ”€â”€ python-sandbox.yaml      19 cases â€” subprocess isolation
+â”œâ”€â”€ coder-side-effects.yaml  13 cases â€” write + commit refusals
+â””â”€â”€ workspace/               fixture the agent is entitled to read
 ```
 
 ## Swapping models
@@ -571,7 +571,7 @@ factory agents from-goal "Read and summarise project files" \
 ```
 
 `--dry-run` shows the plan before anything is written. Requirements resolve by
-explicit name only — an unknown requirement, or one whose capability no provider
+explicit name only â€” an unknown requirement, or one whose capability no provider
 implements, is an error:
 
 ```
@@ -591,7 +591,7 @@ output names both, so a pass-rate drop is attributable:
 ```
 
 Version ordering is numeric, not lexicographic: `0.10.0` sorts after `0.9.0`.
-`version` itself is excluded from diffs — it is the row key, not behaviour, so
+`version` itself is excluded from diffs â€” it is the row key, not behaviour, so
 comparing it would report every version bump as a change.
 
 ## Tool schemas
@@ -615,7 +615,7 @@ class GitCommit(Capability):
 
 This used to be one generic function producing `{path: string}` for everything.
 A real model was therefore told that `git.commit` takes `path` and never
-`message`, and that `python.execute` takes `path` and never `code` — and because
+`message`, and that `python.execute` takes `path` and never `code` â€” and because
 `path` was **required**, no capability except `filesystem.read` was callable as
 described. 271 tests passed throughout, because the scripted evals manufacture
 `ToolCall` objects directly and never go through a schema.
@@ -636,7 +636,7 @@ Two things now stop that from recurring:
 and `refuses-absolute-path-write` cases used one, so on a non-Windows runner they
 denied nothing and failed. Both now use a target that is absolute and outside the
 workspace everywhere, which also means a broken escape lands somewhere inert
-instead of a protected system folder — the sabotage audit reports
+instead of a protected system folder â€” the sabotage audit reports
 `path-confinement` as a clean `DETECTED (7 case(s))` rather than hanging.
 
 ## The API boundary
@@ -644,7 +644,7 @@ instead of a protected system folder — the sabotage audit reports
 The capability root is the most security-relevant value in the system.
 `safe_join` confines paths to it, `filesystem.write` writes inside it,
 `python.execute` runs there, `git.commit` commits there. The model can never
-change it — the factory pins it at grant time and the gate strips any attempt.
+change it â€” the factory pins it at grant time and the gate strips any attempt.
 
 That guarantee is worth nothing if an HTTP client can supply the root. It could:
 
@@ -658,7 +658,7 @@ Two things now prevent that.
 **Clients send an id, not a path.** `WorkspaceRegistry` is a server-side map of
 opaque ids to approved directories. `RunRequest` takes `workspace_id`. Ids match
 `^[a-z0-9][a-z0-9_-]{0,63}$` and are dict keys, so an id is never joined to a
-base path and never reaches the filesystem as a path — traversal in an id is not
+base path and never reaches the filesystem as a path â€” traversal in an id is not
 a concept that can exist. Directories are resolved once, at registration, so a
 symlink swapped in afterwards cannot move the root.
 
@@ -692,7 +692,7 @@ that works with a credential you read off the console, not an open one. Keys are
 compared with `hmac.compare_digest`.
 
 Request models use `extra="forbid"`, so a client still sending `workspace: "/"`
-gets a `422` rather than a silently-ignored field — a caller must never believe
+gets a `422` rather than a silently-ignored field â€” a caller must never believe
 they aimed the agent somewhere they did not.
 
 `/docs`, `/redoc` and `/openapi.json` are disabled unless `FACTORY_API_DOCS=1`.
@@ -707,7 +707,7 @@ curl -H "Authorization: Bearer $KEY" localhost:8000/workspaces
 python verify_api_e2e.py           # run -> trace_id -> /traces/{id}, over a socket
 ```
 
-`tests/test_api_security.py` drives the real app over ASGI — the bug was only
+`tests/test_api_security.py` drives the real app over ASGI â€” the bug was only
 ever visible at the HTTP boundary, since a unit test of `_compile` *was* the
 path. Verified load-bearing: reintroducing the `workspace` field turns 17 tests
 red, including `test_workspace_path_field_is_rejected`.
@@ -716,7 +716,7 @@ red, including `test_workspace_path_field_is_rejected`.
 
 `/run` used to build its own trace store from the submitted spec, whose default
 is `memory`. Every API run was traced into a throwaway `MemoryTraceStore`, so
-`/traces` never saw a trace the API itself produced — two disconnected notions of
+`/traces` never saw a trace the API itself produced â€” two disconnected notions of
 persistence, one of them permanently empty.
 
 The server now injects its own store, and `/run` returns `trace_id` so a client
@@ -729,7 +729,7 @@ compiled = compile_agent(spec, registry, workspace=ws, model=model, store=STORE)
 The subtler half: `memory.path` is reachable from the spec YAML, and
 `SqliteTraceStore` does `Path(path).parent.mkdir(parents=True, exist_ok=True)`.
 A caller could therefore choose where the server creates directories and writes a
-database — the same class of bug as accepting a workspace path. Persistence is now
+database â€” the same class of bug as accepting a workspace path. Persistence is now
 server configuration:
 
 ```
@@ -745,7 +745,7 @@ persistence is server configuration (FACTORY_TRACE_DB), not a request field.
 ```
 
 `verify_api_e2e.py` drives a real uvicorn over a socket and checks the whole
-chain: run → `trace_id` → `/traces` → `/traces/{id}`, plus that a hostile
+chain: run â†’ `trace_id` â†’ `/traces` â†’ `/traces/{id}`, plus that a hostile
 `memory:` block creates no file and no directory.
 
 ## One run, one export
@@ -754,7 +754,7 @@ chain: run → `trace_id` → `/traces` → `/traces/{id}`, plus that a hostile
 each step so a run killed mid-flight stays recoverable, so one 5-step run
 produced **six** `factory.run` observations.
 
-Duplicates are the least of it. They were *cumulative* — steps 1, 2, 3, 4, 5, 5 —
+Duplicates are the least of it. They were *cumulative* â€” steps 1, 2, 3, 4, 5, 5 â€”
 so any aggregate over "steps per run" or "tokens per run" reads a sawtooth and
 over-counts by roughly half. The first five are incomplete by construction, and
 each carries whatever status the run was in at that moment.
@@ -781,7 +781,7 @@ export-on-every-save turns 11 tests red.
 
 > Langfuse fixtures are session-scoped in `conftest.py`, not per file. A second
 > session client re-registers the global OTel tracer provider and the two files
-> steal spans from each other — an order-dependent failure visible only in a full
+> steal spans from each other â€” an order-dependent failure visible only in a full
 > run.
 
 ## Concurrent runs keep their own trace
@@ -798,7 +798,7 @@ run A -> model.complete()      sees B, files its generation under B
 
 Reproduced with two runs on one observability: **all three** of run A's model
 calls were filed under run B's trace. Run A produced no generations of its own,
-and nothing errored — the data was simply wrong.
+and nothing errored â€” the data was simply wrong.
 
 The active run is now a `contextvars.ContextVar`, copied into every
 `asyncio.Task`:
@@ -812,7 +812,7 @@ Each `LangfuseObservability` gets its own variable, so two observability objects
 do not read each other's runs.
 
 The honest caveat: isolation is **per task**. Two runs interleaved inside a
-single task would still share a binding — but that cannot happen, because
+single task would still share a binding â€” but that cannot happen, because
 coroutines only interleave at suspension points and `gather`/`create_task` give
 each run its own task.
 
@@ -834,7 +834,7 @@ Both were the same failure shape: code that reads as if it implements a feature
 and silently does not. Neither raised, so 415 tests passed throughout.
 
 **`CompiledAgent.denied`** read `self.gate.grants`. `CapabilityGate` exposes
-`granted_names`, so the property raised `AttributeError` on any access — and
+`granted_names`, so the property raised `AttributeError` on any access â€” and
 `compile_agent` computed the real value, put it in warnings, then dropped it.
 It is now a field, populated from `resolve_capabilities`, and empty under
 `strict=True` (where a non-empty value is a `CompileError` instead).
@@ -848,7 +848,7 @@ if allow_empty or self._allow_empty:
 
 The flag produced a refusal *because* empty commits were enabled, and told the
 caller to enable a flag it had just enabled. It could never do anything. Now the
-branch permits an empty commit and passes `--allow-empty` — but only when nothing
+branch permits an empty commit and passes `--allow-empty` â€” but only when nothing
 is staged, so a genuine "git add matched nothing" is not masked as success.
 
 `allow_empty` is pinned, so the gate strips it from model arguments. Verified
@@ -860,7 +860,7 @@ commit on, and the attempt is recorded as a violation.
 Two bugs, one cause: size was measured only where it was easiest.
 
 `Message.estimated_tokens()` counted `content` alone, so an assistant turn
-carrying a 5KB Python program measured as **2 tokens** — and `truncate()` used
+carrying a 5KB Python program measured as **2 tokens** â€” and `truncate()` used
 that number to decide what still fit. Tool schemas, sent on every request, were
 not counted at all.
 
@@ -876,13 +876,13 @@ prompt     = max(int(response.prompt_tokens or 0), local_prompt)
 completion = max(int(response.completion_tokens or 0), local_completion)
 ```
 
-An honest provider is unaffected — its figure is at least as large. An
+An honest provider is unaffected â€” its figure is at least as large. An
 under-reporting one cannot under-charge, and the ceiling still trips.
 
 ### What that exposed
 
 Fixing the accounting broke an eval case, and the reason was worth more than the
-fix. `rejects-oversized-write` sends 600KB to test the 512KB write cap — but
+fix. `rejects-oversized-write` sends 600KB to test the 512KB write cap â€” but
 600KB is ~150K tokens against the coder spec's 60K ceiling, so the runtime halted
 on the token budget and the capability was never reached.
 
@@ -899,7 +899,7 @@ inconsistent.
 
 `await model.complete(...)` had no deadline. The loop checked elapsed time at the
 top of each iteration, so an adapter that never returned blocked forever and
-**neither `max_steps` nor `step_timeout_s` was reachable** — the limits were
+**neither `max_steps` nor `step_timeout_s` was reachable** â€” the limits were
 decorative. Measured with a 1.0s budget and a hanging adapter: the run never
 halted.
 
@@ -916,11 +916,11 @@ would leave the trace unable to say which bound was hit.
 `asyncio.wait_for` cancels the coroutine, so a stuck socket is actually torn down
 rather than leaked.
 
-### The run-level clock is still live — but only just
+### The run-level clock is still live â€” but only just
 
 This is worth being explicit about, because the two bounds look redundant and
 are not. If every model call finishes inside `step_timeout_s`, then
-`max_steps * step_timeout_s` — the entire run budget — **cannot** be reached by
+`max_steps * step_timeout_s` â€” the entire run budget â€” **cannot** be reached by
 model time at all. The per-call deadline would make the run-level check
 unreachable dead code.
 
@@ -932,8 +932,8 @@ that makes a capability the slow party specifically to keep that path honest.
 ## The API's state is per-app, not per-process
 
 `STORE`, `AGENTS`, `WORKSPACES` and `AUTH` were module globals. That is one
-database per process, no way to serve two tenants, and — the part that actually
-bit — tests that had to monkeypatch module attributes and restore them, which is
+database per process, no way to serve two tenants, and â€” the part that actually
+bit â€” tests that had to monkeypatch module attributes and restore them, which is
 the pattern most likely to leak state or become order-dependent.
 
 They now live in one object, built per app:
@@ -957,7 +957,7 @@ Handlers declare what they use:
 async def traces(limit: int = 20, store: TraceStore = Depends(get_store)): ...
 ```
 
-so there is one lookup — `app.state.deps` — rather than a module attribute that
+so there is one lookup â€” `app.state.deps` â€” rather than a module attribute that
 could drift from what the app actually uses.
 
 The module-level `app` still exists for `uvicorn factory.api.server:app`, and the
@@ -984,7 +984,7 @@ singleton turns 3 isolation tests red.
 ### A fixture collision this surfaced
 
 The Langfuse session fixture was called `client`. When the API tests lost their
-local `client` fixture they silently picked up the **Langfuse** one — which is
+local `client` fixture they silently picked up the **Langfuse** one â€” which is
 how `'Langfuse' object has no attribute 'get'` appeared. Renamed to `lf_client` /
 `lf_exporter`, and the API ones to `api_client`. A generic fixture name in a
 shared `conftest.py` is a trap, and the injection work is what made it bite
@@ -1017,12 +1017,12 @@ Two behaviours here are deliberate and easy to get wrong:
 
 Tenants are separated by `;` and capabilities by `,`. Commas cannot do both jobs:
 a comma-only version read `alice=filesystem.read,filesystem.write` as tenant
-`alice` plus a nonsense tenant `filesystem.write` — a format that mis-parses into
+`alice` plus a nonsense tenant `filesystem.write` â€” a format that mis-parses into
 *more* access is worse than one that fails loudly. A malformed policy raises
 rather than falling back to unrestricted.
 
 The tenant is a request-scoped dependency resolved by `require_auth`, so two
-concurrent requests cannot be attributed to each other — the same reason the
+concurrent requests cannot be attributed to each other â€” the same reason the
 Langfuse active-run id became a `ContextVar`.
 
 ### Data model changes, and a migration
@@ -1032,7 +1032,7 @@ Traces gained a `tenant` column; the registry's primary keys became
 register `reader`.
 
 `CREATE TABLE IF NOT EXISTS` is a no-op against an existing table, so a
-pre-tenant database would have kept its old shape — and the registry's reads
+pre-tenant database would have kept its old shape â€” and the registry's reads
 would have been **unscoped while the code believed they were scoped**. The
 registry migration rebuilds the tables and attributes existing rows to `default`,
 which is the tenant a single-key deployment always was. The traces migration is a
@@ -1044,7 +1044,7 @@ asserted unchanged in `tests/test_tenant_migration.py`.
 One ordering trap worth recording: the tenant indexes could not live in `SCHEMA`.
 `executescript` runs the whole script, so on an old database
 `CREATE TABLE IF NOT EXISTS agents` is a no-op and the following
-`CREATE INDEX ... ON agents(tenant)` fails — before the migration ever runs.
+`CREATE INDEX ... ON agents(tenant)` fails â€” before the migration ever runs.
 They are created after `_migrate` instead.
 
 Verified load-bearing: removing the policy check and the trace scoping turns 8
@@ -1054,7 +1054,7 @@ tests red.
 
 `filesystem.write` caps a single call's blast radius. `max_tokens` is a cumulative
 budget for a whole run. For both to mean anything the inner bound has to sit
-below the outer — and it did not:
+below the outer â€” and it did not:
 
 | | payload |
 |---|---|
@@ -1062,8 +1062,8 @@ below the outer — and it did not:
 | `coder`'s budget, 60K tokens | ~240,000 bytes |
 
 The cap could not fire at **any** budget a shipping spec grants: 2x out of reach
-for `coder`, 3–33x for the rest, and none of the other specs can write at all. A
-limit that never fires is not a limit, and an untested one rots — the same
+for `coder`, 3â€“33x for the rest, and none of the other specs can write at all. A
+limit that never fires is not a limit, and an untested one rots â€” the same
 failure as the false-green eval cases.
 
 **The token ceiling is authoritative; the write cap is the inner bound.** So the
@@ -1080,20 +1080,20 @@ so raising either number in isolation is caught. Restoring the old 512KB turns 2
 tests red *and* flips `rejects-oversized-write` to a security failure.
 
 One correction worth recording: I had written that `append` remained a way to
-produce a large file. It is not — the cap is on the **resulting file**, not on one
+produce a large file. It is not â€” the cap is on the **resulting file**, not on one
 write, so `append` is refused once it would push the file past the limit. The
 comment and the tests now say so.
 
 ## Audit findings
 
 A review produced thirteen findings, all confirmed by running the code and all now
-resolved. Kept as a record of what was wrong and what each fix rests on — a
+resolved. Kept as a record of what was wrong and what each fix rests on â€” a
 struck-through table that says only "fixed" would lose the reasoning.
 
 | # | Issue | Resolution |
 |---|---|---|
 | 1 | `RunRequest` accepted a caller-supplied `workspace`; `/run` had no auth | [The API boundary](#the-api-boundary) |
-| 2 | `/run` built its own trace store; `/traces` read a different global `STORE` | [Trace persistence](#trace-persistence-is-server-owned) — also closed `memory.path` as a write-location injection point |
+| 2 | `/run` built its own trace store; `/traces` read a different global `STORE` | [Trace persistence](#trace-persistence-is-server-owned) â€” also closed `memory.path` as a write-location injection point |
 | 3 | Langfuse exported on every `save()`, creating a cumulative duplicate per step | [One run, one export](#one-run-one-export) |
 | 4 | Langfuse held the active run id in a mutable list | A `ContextVar` per observability; concurrent runs keep their own trace |
 | 5 | The wall clock was only checked between steps | [A hanging model cannot hang the run](#a-hanging-model-cannot-hang-the-run) |
@@ -1106,7 +1106,7 @@ struck-through table that says only "fixed" would lose the reasoning.
 | 12 | The 512KB write cap could never fire | [Which bound is authoritative](#which-bound-is-authoritative) |
 | 13 | No caller identity: every trace and spec was world-readable | [Tenants](#tenants-who-is-asking-and-what-they-may-do) |
 
-Six of these were invisible to the test suite: 8–9 and 12 because a limit or
+Six of these were invisible to the test suite: 8â€“9 and 12 because a limit or
 budget that nobody measured cannot be wrong visibly, and 3, 4, 10 and 13 because
 they only misbehave under concurrency, across requests, or with a real model.
 Every fix here is now covered by a test that goes red when the fix is undone.
@@ -1122,7 +1122,7 @@ Every fix here is now covered by a test that goes red when the fix is undone.
 - **A real model.** No Ollama, and the only reachable provider models return 402.
   Every behavioural claim about the loop rests on scripted adapters. Finding 1
   was fixed because a real model would have received a schema telling it
-  `git.commit` takes `path` — but that schema has never been sent to one.
+  `git.commit` takes `path` â€” but that schema has never been sent to one.
 
 ## Isolation: two levels, not one
 
@@ -1182,7 +1182,7 @@ runtime. Without one the capability refuses, so every containment assertion fail
 for the wrong reason and the baseline goes red on a machine that is fine.
 Silently passing would be worse: CI green, containment untested. So suites declare
 `requires: [container]`, unmet requirements become skips, and a skip makes
-`factory eval` **exit non-zero** — a tool whose job is proving things should not
+`factory eval` **exit non-zero** â€” a tool whose job is proving things should not
 report success when a suite proved nothing. Skips are counted separately from
 failures and never render as a 100% pass rate, and `--expect-skips` names the one
 exception:
@@ -1198,7 +1198,7 @@ without containment ever being proven.
 
 `factory sabotage` inherits the coupling: it builds its baseline from these
 suites, so a machine with no container runtime cannot run the audit at all. That
-is worth stating plainly — the audit used to work anywhere and now needs Docker
+is worth stating plainly â€” the audit used to work anywhere and now needs Docker
 up. It is the price of having the containment cases in the baseline rather than
 merely beside it.
 
@@ -1241,7 +1241,7 @@ Langfuse round trip. See [Still unverified](#still-unverified).
 
 ## Next milestone candidates
 
-1. Real OS-level isolation for code execution — Windows Job Object or a
+1. Real OS-level isolation for code execution â€” Windows Job Object or a
    container backend, selected by `sandbox_level`
 2. `web.search` capability, with a rate/allowlist policy
 3. Agent-vs-agent eval: same suites, different spec versions, measured
@@ -1249,7 +1249,7 @@ Langfuse round trip. See [Still unverified](#still-unverified).
 
 ## License
 
-MIT — see [LICENSE](LICENSE). Declared in packaging metadata as an SPDX
+MIT â€” see [LICENSE](LICENSE). Declared in packaging metadata as an SPDX
 identifier (`License-Expression: MIT`) rather than a classifier, so tooling and
 PyPI can read it without parsing prose.
 

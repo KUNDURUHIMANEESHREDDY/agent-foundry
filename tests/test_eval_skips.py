@@ -144,7 +144,94 @@ class TestSkipsAreVisibleAndGated:
 
         assert "WARNING" in inspect.getsource(cmd_eval)
 
-    def test_a_skip_makes_the_cli_exit_non_zero(self):
+class TestASuiteThatCannotLoadIsAFailure:
+    """The defect, pinned to the scenario that exposed it.
+
+Adding an isolation suite whose spec had a field the schema rejected produced
+this: `run_suite` returned a summary carrying an error and zero cases,
+`s.failed` was 0, and `factory eval` printed "TOTAL 46/46, 0 security
+assertion failure(s)" and exited 0. A suite that ran nothing reported as a
+clean run, and CI would have stayed green.
+
+The skip tests below cover a neighbouring path -- an unmet requirement, which
+sets the same field. Neither name says "the spec did not parse", which is the
+case a maintainer would actually hit.
+"""
+
+def _run_with(summaries, expect_skips: str = "") -> int:
+    import argparse
+
+    import factory.eval as eval_pkg
+    from factory.cli import cmd_eval
+
+    async def fake_run_suite(name, base, use_script=True):
+        return summaries[name]
+
+    originals = (eval_pkg.load_all, eval_pkg.run_suite)
+    eval_pkg.load_all = lambda _p: list(summaries)
+    eval_pkg.run_suite = fake_run_suite
+    try:
+        return cmd_eval(
+            argparse.Namespace(suites="evals", json=False, live=False,
+                               baseline=None, compare=None,
+                               expect_skips=expect_skips)
+        )
+    finally:
+        eval_pkg.load_all, eval_pkg.run_suite = originals
+
+def _summaries():
+    from factory.eval.runner import RunSummary
+
+    return {
+        "good": RunSummary("reader-boundary", "spec", "0.1.0", total=12, passed=12),
+        "broken": RunSummary(
+            "container-isolation", "?", "?", total=0,
+            error="spec load failed: Invalid spec: isolation not permitted",
+        ),
+    }
+
+def test_a_spec_that_will_not_parse_exits_non_zero():
+    assert _run_with(_summaries()) == 1, (
+        "a suite whose spec failed to load exited 0, so the run read as a "
+        "clean pass having tested nothing"
+    )
+
+def test_it_is_reported_as_blocked_not_merely_counted(capsys):
+    _run_with(_summaries())
+    out = capsys.readouterr()
+    assert "BLOCKED" in out.out
+    assert "ran no cases" in out.out, (
+        "the message must say the suite proved nothing, not just that it "
+        "had an error"
+    )
+
+def test_the_good_suites_still_run():
+    """One broken suite must not hide the ones that did run."""
+    summaries = _summaries()
+    assert summaries["good"].passed == 12
+
+def test_a_healthy_run_exits_zero():
+    from factory.eval.runner import RunSummary
+
+    healthy = {
+        "reader-boundary": RunSummary("reader-boundary", "spec", "0.1.0",
+                                      total=12, passed=12),
+    }
+    assert _run_with(healthy) == 0, (
+        "the exit code must depend on the suites, not be stuck non-zero"
+    )
+
+def test_naming_the_broken_suite_does_not_excuse_it():
+    """A broken spec is not a missing runtime.
+
+    `--expect-skips` is for an environment that cannot run a suite. A spec
+    that does not parse is a defect in the repository, and allowing it
+    through would let a typo disable a suite permanently.
+    """
+    assert _run_with(_summaries(), expect_skips="container-isolation") == 1
+
+
+def test_a_skip_makes_the_cli_exit_non_zero():
         """Decided deliberately: a suite that proved nothing must not exit 0.
 
         The tempting alternative is exit 0 with a warning, on the reasoning that
@@ -298,19 +385,55 @@ class TestTheCiGateExists:
         assert not logs, f"CI logs are tracked: {logs}"
 
     def test_json_stdout_is_pure_json_even_when_warnings_fire(self):
-        """`--json` must be parseable on its own.
+        """`--json` must be parseable on its own, checked by parsing it.
 
-        The BLOCKED banner and the skip warning used to go to stdout, so the gate
-        hit "Extra data: line 548" the moment anything had something to say.
-        They go to stderr now; this asserts the contract, not one warning.
+        Asserting the source contains a particular conditional only proves the
+        line is still there. This runs the CLI with a suite that fails to load --
+        which fires both the BLOCKED banner and the warning -- and requires stdout
+        to be nothing but JSON.
+
+        That is the failure CI hit: `json.load(open("eval.json"))` returned
+        "Extra data: line 548".
         """
-        import inspect
+        import argparse
+        import contextlib
+        import io
+        import json
 
+        import factory.eval as eval_pkg
         from factory.cli import cmd_eval
+        from factory.eval.runner import RunSummary
 
-        source = inspect.getsource(cmd_eval)
-        assert "sys.stderr if args.json else sys.stdout" in source, (
-            "--json output must be machine-readable on its own"
+        async def fake_run_suite(name, base, use_script=True):
+            return RunSummary(
+                name, "?", "?", total=0,
+                error="spec load failed: Invalid spec",
+            )
+
+        originals = (eval_pkg.load_all, eval_pkg.run_suite)
+        eval_pkg.load_all = lambda _p: ["container-isolation"]
+        eval_pkg.run_suite = fake_run_suite
+
+        out, err = io.StringIO(), io.StringIO()
+        try:
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                rc = cmd_eval(
+                    argparse.Namespace(suites="evals", json=True, live=False,
+                                       baseline=None, compare=None,
+                                       expect_skips="")
+                )
+        finally:
+            eval_pkg.load_all, eval_pkg.run_suite = originals
+
+        assert rc == 1, "a suite that ran no cases must still exit non-zero"
+
+        # The whole point: this must not raise.
+        report = json.loads(out.getvalue())
+
+        assert "suites" in report
+        assert err.getvalue().strip(), (
+            "the warning must have gone somewhere; if stdout was used, the "
+            "json above would not have parsed"
         )
 
 
