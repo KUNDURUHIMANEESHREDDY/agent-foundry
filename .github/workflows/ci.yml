@@ -62,7 +62,10 @@ jobs:
         env:
           EXPECTED_SKIPPED_SUITES: ${{ matrix.expect_skips }}
         run: |
-          factory eval --suites evals --json > eval.json
+          # The same declaration the eval step used. Without it this re-run
+          # blocks on the very skip the matrix permits, which is what the first
+          # version of this step did.
+          factory eval --suites evals --expect-skips "$EXPECTED_SKIPPED_SUITES" --json > eval.json
           python - <<'PY'
           import json, os, sys
 

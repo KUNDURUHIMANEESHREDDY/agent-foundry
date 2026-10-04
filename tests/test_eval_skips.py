@@ -250,6 +250,20 @@ class TestTheCiGateExists:
         assert "--json" in text
         assert '"skipped"' in text
 
+    def test_both_eval_steps_carry_the_declaration(self):
+        """The gate re-runs eval, so it needs the same flag the eval step used.
+
+        Without it the gate blocks on the very skip the matrix permits, and the
+        windows job fails while ubuntu passes -- which is exactly what happened.
+        """
+        text = self.WORKFLOW.read_text(encoding="utf-8")
+        assert text.count("--expect-skips") >= 2, (
+            "both `factory eval` invocations must pass --expect-skips"
+        )
+        assert 'EXPECTED_SKIPPED_SUITES" --json' in text, (
+            "the gate must pass the matrix value into its own eval run"
+        )
+
     def test_each_runner_declares_what_may_skip(self):
         """Containment is proven on ubuntu; windows has no usable runtime.
 
