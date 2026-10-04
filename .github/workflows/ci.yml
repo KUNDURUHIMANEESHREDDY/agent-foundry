@@ -51,7 +51,7 @@ jobs:
         run: pytest tests -q
 
       - name: Eval suites
-        run: factory eval --suites evals
+        run: factory eval --suites evals --expect-skips "${{ matrix.expect_skips }}"
 
       - name: Containment cases actually ran
         # A suite whose external runtime is missing is skipped, not failed, so

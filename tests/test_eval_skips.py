@@ -150,11 +150,11 @@ class TestSkipsAreVisibleAndGated:
         The tempting alternative is exit 0 with a warning, on the reasoning that
         a laptop without Docker should still be able to run the harness. But this
         tool exists to prove things, and an exit code is how a build reads it.
-        Skipping is reported as loudly as a failure and scored like one.
 
-        `factory sabotage` depends on this too: it establishes its baseline by
-        running these suites, and a baseline that silently excluded the
-        containment cases would not be a baseline.
+        `--expect-skips` is the escape hatch, not the default: a runner that
+        cannot run containers names the suite rather than having every skip
+        forgiven, and a named suite that runs anyway is itself a failure, so the
+        declaration cannot quietly widen.
         """
         import argparse
 
@@ -176,29 +176,36 @@ class TestSkipsAreVisibleAndGated:
             ],
         )
 
-        async def fake_run_suite(s, base, use_script=True):
-            return RunSummary(
-                s.name, "spec", "0.1.0", total=1, skipped=1,
-                error="requirements not met: container",
-            )
+        async def skipped(s, base, use_script=True):
+            return RunSummary(s.name, "spec", "0.1.0", total=1, skipped=1,
+                              error="requirements not met: container")
 
-        # `cmd_eval` does `from factory.eval import load_all, run_suite`, so it
-        # resolves those names on the *package*. Patching the runner module, as
-        # the first version of this test did, leaves the real ones in place --
-        # which is why it ran the entire eval suite and still failed.
-        originals = (eval_pkg.load_all, eval_pkg.run_suite)
-        eval_pkg.load_all = lambda _p: [suite]
-        eval_pkg.run_suite = fake_run_suite
-        try:
-            args = argparse.Namespace(suites="evals", json=False, live=False,
-                                      baseline=None, compare=None)
-            rc = cmd_eval(args)
-        finally:
-            eval_pkg.load_all, eval_pkg.run_suite = originals
+        async def ran(s, base, use_script=True):
+            return RunSummary(s.name, "spec", "0.1.0", total=1, passed=1)
 
-        assert rc == 1, (
-            "a suite that ran no cases exited 0, so a build would read as a "
-            "clean run having tested nothing"
+        def _run(expect_skips, runner=skipped):
+            originals = (eval_pkg.load_all, eval_pkg.run_suite)
+            eval_pkg.load_all = lambda _p: [suite]
+            eval_pkg.run_suite = runner
+            try:
+                return cmd_eval(
+                    argparse.Namespace(suites="evals", json=False, live=False,
+                                       baseline=None, compare=None,
+                                       expect_skips=expect_skips)
+                )
+            finally:
+                eval_pkg.load_all, eval_pkg.run_suite = originals
+
+        assert _run("") == 1, "an undeclared skip must fail the run"
+        assert _run("container-isolation") == 0, (
+            "a declared skip must not fail the run"
+        )
+        assert _run("some-other-suite") == 1, (
+            "naming a different suite must not excuse this one"
+        )
+        assert _run("container-isolation", runner=ran) == 1, (
+            "a suite expected to skip that ran anyway means the declaration is "
+            "stale, and must not pass silently"
         )
 
 

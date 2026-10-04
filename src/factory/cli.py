@@ -153,26 +153,55 @@ def cmd_eval(args: argparse.Namespace) -> int:
     # `json.load(open("eval.json"))` and got "Extra data: line 548".
     notes = sys.stderr if args.json else sys.stdout
 
-    if unloadable:
+    # Which suites this environment is *allowed* to skip. A skip normally fails
+    # the run -- a tool that proves things should not report success when a suite
+    # proved nothing -- but a runner with no container runtime cannot prove
+    # anything about containers, and failing there would mean the suite never gets
+    # verified anywhere. Naming the exception here rather than in a workflow step
+    # keeps the policy in the tool, where it is testable, and means one exit code
+    # decides rather than a step ordering.
+    allowed_skips = {
+        name.strip()
+        for name in (getattr(args, "expect_skips", "") or "").split(",")
+        if name.strip()
+    }
+    unexpected_skips = [s for s in unloadable if s.suite not in allowed_skips]
+
+    if unexpected_skips:
         print(
             "\nBLOCKED: "
-            + ", ".join(f"{s.suite} ({s.error.splitlines()[0]})" for s in unloadable)
+            + ", ".join(
+                f"{s.suite} ({s.error.splitlines()[0]})" for s in unexpected_skips
+            )
             + "\nThese suites ran no cases. That is not a pass.",
             file=notes,
         )
 
-    # A skipped suite is not a failure -- it is an absence of evidence, and the
-    # environment may legitimately lack the runtime. It is reported so a human
-    # sees it, and CI asserts zero skips where it knows the runtime exists.
     skipped_total = sum(s.skipped for s in summaries)
     if skipped_total:
+        detail = (
+            " Allowed here by --expect-skips; they prove nothing."
+            if allowed_skips
+            else " CI asserts these ran."
+        )
         print(
             f"\nWARNING: {skipped_total} eval case(s) were SKIPPED for want of an "
-            f"external runtime. They proved nothing. CI asserts these ran.",
+            f"external runtime.{detail}",
             file=notes,
         )
 
-    return 1 if sec or broken or unloadable else 0
+    # A suite declared expected to skip that actually ran means the runtime is
+    # available and the declaration is stale. Failing keeps that from drifting
+    # towards permitting skips of anything.
+    stale = allowed_skips - {s.suite for s in unloadable}
+    if stale:
+        print(
+            f"\nWARNING: expected to skip but ran: {sorted(stale)}. The runtime is "
+            f"available, so drop them from --expect-skips.",
+            file=notes,
+        )
+
+    return 1 if sec or broken or unexpected_skips or stale else 0
 
 
 def cmd_sabotage(args: argparse.Namespace) -> int:
@@ -399,6 +428,17 @@ def main(argv: list[str] | None = None) -> int:
     p_eval = sub.add_parser("eval", help="Run eval suites against a spec")
     p_eval.add_argument("--suites", default="evals")
     p_eval.add_argument("--json", action="store_true")
+    p_eval.add_argument(
+        "--expect-skips",
+        default="",
+        help=(
+            "Comma-separated suites this environment may skip for want of an "
+            "external runtime. A skip normally fails the run; naming a suite here "
+            "is how a runner without, say, a container runtime still gets the "
+            "rest verified. A named suite that runs anyway is also a failure, so "
+            "the declaration cannot go stale unnoticed."
+        ),
+    )
     p_eval.add_argument(
         "--live", action="store_true", help="use the real model instead of scripted turns"
     )
