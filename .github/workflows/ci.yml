@@ -1,0 +1,92 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # The audit shells out to git and to subprocesses; the symlink guards in
+        # the capability tests are skipped on Windows, so both are covered.
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Configure git identity
+        # `git.commit` sets its own author, but the sandbox scripts and the
+        # eval runner still touch the host config.
+        run: |
+          git config --global user.email "ci@example.com"
+          git config --global user.name  "ci"
+          git config --global init.defaultBranch main
+
+      - name: Unit tests
+        run: pytest tests -q
+
+      - name: Eval suites
+        run: factory eval --suites evals
+
+  # The suite passing is not evidence that the suite works. This job breaks one
+  # mitigation at a time and fails if the suite does not notice.
+  sabotage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Configure git identity
+        run: |
+          git config --global user.email "ci@example.com"
+          git config --global user.name  "ci"
+          git config --global init.defaultBranch main
+
+      - name: Verify the working tree is untouched
+        # The audit must never patch the repository. If it ever does, fail loudly
+        # rather than reporting a result produced by a dirty tree.
+        run: |
+          git status --porcelain > before.txt
+          factory sabotage --suites evals --jobs 4
+          git status --porcelain > after.txt
+          diff before.txt after.txt && echo "working tree unchanged"
+
+      - name: No temp sandboxes left behind
+        run: |
+          left=$(find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'factory-sabotage-*' | wc -l)
+          if [ "$left" -ne 0 ]; then
+            echo "::error::$left sabotage sandbox(es) leaked into the temp directory"
+            exit 1
+          fi
+
+      - name: No orphan processes
+        run: |
+          sleep 5
+          strays=$(pgrep -f 'while True' | wc -l)
+          if [ "$strays" -ne 0 ]; then
+            echo "::error::$strays orphaned python process(es) survived the audit"
+            pgrep -af 'while True'
+            exit 1
+          fi

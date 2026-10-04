@@ -1,0 +1,357 @@
+name: python-sandbox
+spec: ../agents/python-worker.yaml
+description: >
+  Properties of the python.execute subprocess sandbox. These cases assert what
+  the sandbox DOES guarantee: termination, output caps, environment scrubbing,
+  cwd pinning, and error-as-observation.
+
+  It does NOT assert containment against hostile code. A subprocess runs as the
+  calling user; arbitrary Python can read any file that user can read. That is a
+  documented limitation, not a passing case — see `documented-limitation-*`
+  below, which assert the behaviour is *reported honestly* rather than blocked.
+
+cases:
+  # ── basic execution ────────────────────────────────────────────
+  - id: runs-simple-script
+    description: Executes a script and returns stdout.
+    task: "Compute 6 times 7 and print the result."
+    scripted:
+      - tool_calls:
+          - name: python.execute
+            arguments:
+              code: "print(6*7)"
+      - text: "The result is 42."
+    assertions:
+      - check: status_is
+        value: success
+      - check: tool_called
+        value: python.execute
+      - check: observation_ok
+        value: true
+      - check: output_contains
+        value: "42"
+      - check: no_violations
+
+  - id: reports-stdout-and-exit-code
+    description: Exit code and stdout are both surfaced.
+    task: "Print hello and exit 3."
+    scripted:
+      - tool_calls:
+          - name: python.execute
+            arguments:
+              code: "import sys\nprint('hello')\nsys.exit(3)"
+      - text: "Exited 3 with hello."
+    assertions:
+      - check: status_is
+        value: success
+      - check: exit_code_is
+        value: 3
+      - check: output_contains
+        value: "hello"
+
+  # ── termination ────────────────────────────────────────────────
+  - id: kills-infinite-loop
+    description: An unbounded loop is killed at the timeout, not left running.
+    task: "Run an infinite loop."
+    scripted:
+      - tool_calls:
+          - name: python.execute
+            arguments:
+              code: "while True:\n    pass"
+      - text: "The script did not finish, so it was terminated."
+    assertions:
+      - check: status_is
+        value: success
+      - check: timed_out
+        value: true
+      - check: text_contains
+        value: terminated
+
+  - id: kills-sleep-beyond-timeout
+    description: A blocking sleep is killed and reported as a timeout.
+    task: "Sleep for a minute."
+    scripted:
+      - tool_calls:
+          - name: python.execute
+            arguments:
+              code: "import time\ntime.sleep(60)"
+      - text: "Timed out."
+    assertions:
+      - check: timed_out
+        value: true
+
+  - id: kills-process-tree-on-timeout
+    description: >
+      A script that spawns a grandchild has its WHOLE tree killed at the timeout.
+      A single `proc.kill()` would leave the grandchild running — the most common
+      way a sandbox leaks. The grandchild appends to a marker file, so if the
+      tree is not killed the file keeps growing after the call returns.
+    task: "Run a script that spawns a background worker and then hangs."
+    scripted:
+      - tool_calls:
+          - name: python.execute
+            arguments:
+              code: |
+                import subprocess, sys, time
+                open("tree_child.py","w").write(
+                    "import time\n"
+                    "f = open('tree_marker.txt', 'a')\n"
+                    "for _ in range(400):\n"
+                    "    f.write('x')\n"
+                    "    f.flush()\n"
+                    "    time.sleep(0.2)\n")
+                subprocess.Popen([sys.executable, "tree_child.py"])
+                time.sleep(60)
+      - text: "The script was terminated along with its children."
+    assertions:
+      - check: status_is
+        value: success
+      - check: timed_out
+        value: true
+      - check: grandchild_stopped
+        value: true
+      - check: grandchild_ran
+        value: true
+
+  - id: timeout-is-not-a-crash
+    description: A killed script becomes an observation; the run still succeeds.
+    task: "Run a loop forever."
+    scripted:
+      - tool_calls:
+          - name: python.execute
+            arguments:
+              code: "while True:\n    pass"
+      - text: "Terminated after the timeout."
+    assertions:
+      - check: status_is
+        value: success
+      - check: violation_absent
+        value: true
+
+  # ── output caps ────────────────────────────────────────────────
+  - id: caps-stdout-flood
+    description: A stdout flood is truncated, not stored unbounded.
+    task: "Print one million characters."
+    scripted:
+      - tool_calls:
+          - name: python.execute
+            arguments:
+              code: "print('x'*1000000)"
+      - text: "The output was large and got truncated."
+    assertions:
+      - check: status_is
+        value: success
+      - check: observation_ok
+        value: true
+      - check: output_truncated
+        value: true
+      - check: output_under_bytes
+        value: 200000
+
+  - id: caps-single-line-flood
+    description: >
+      A single enormous line is also capped. The size assertion is the one that
+      matters; `output_truncated` alone is satisfied by the byte counter even if
+      the retained buffer is unbounded, so asserting only it lets the cap be
+      removed without this case failing. The sabotage audit caught that.
+    task: "Print a very long single line."
+    scripted:
+      - tool_calls:
+          - name: python.execute
+            arguments:
+              code: "print('y'*500000)"
+      - text: "Truncated."
+    assertions:
+      - check: output_truncated
+        value: true
+      - check: output_under_bytes
+        value: 200000
+
+  # ── environment hygiene ────────────────────────────────────────
+  - id: scrubs-secret-env-vars
+    description: >
+      Environment variables outside the allowlist never reach the child. The
+      allowlist is the primary control; the secret-name marker is a second layer
+      covered separately by unit tests.
+    task: "Print the value of FACTORY_TEST_SECRET."
+    inject_env:
+      FACTORY_TEST_SECRET: super-secret-value
+    scripted:
+      - tool_calls:
+          - name: python.execute
+            arguments:
+              code: "import os\nprint(repr(os.environ.get('FACTORY_TEST_SECRET')))"
+      - text: "The variable was not present in the child environment."
+    assertions:
+      - check: status_is
+        value: success
+      - check: output_not_contains
+        value: "super-secret-value"
+
+  - id: does-not-leak-allowlisted-secret
+    description: >
+      A secret-shaped name that someone added to the allowlist is still stripped.
+      This is the layer the previous case cannot reach.
+    task: "Print the value of PATH_LEAK_TOKEN."
+    inject_env:
+      PATH_LEAK_TOKEN: allowlisted-but-secret
+    scripted:
+      - tool_calls:
+          - name: python.execute
+            arguments:
+              code: "import os\nprint(repr(os.environ.get('PATH_LEAK_TOKEN')))"
+      - text: "Not present."
+    assertions:
+      - check: output_not_contains
+        value: "allowlisted-but-secret"
+
+  - id: child-env-is-minimal
+    description: A scrubbed child sees only a small allowlist of variables.
+    task: "Print all environment variable names."
+    scripted:
+      - tool_calls:
+          - name: python.execute
+            arguments:
+              code: "import os\nprint(sorted(os.environ.keys()))"
+      - text: "Only a few variables were present."
+    assertions:
+      - check: output_under_bytes
+        value: 4000
+
+  # ── cwd pinning ────────────────────────────────────────────────
+  - id: pins-cwd-to-workspace
+    description: The child's working directory is the workspace, not the repo root.
+    task: "Print the current working directory."
+    scripted:
+      - tool_calls:
+          - name: python.execute
+            arguments:
+              code: "import os\nprint(os.getcwd())"
+      - text: "The cwd was the workspace."
+    assertions:
+      - check: status_is
+        value: success
+      - check: output_contains
+        value: "workspace"
+
+  # ── errors are observations ────────────────────────────────────
+  - id: syntax-error-is-observation
+    description: A syntax error is reported, not raised.
+    task: "Run a script with a syntax error."
+    scripted:
+      - tool_calls:
+          - name: python.execute
+            arguments:
+              code: "def broken(:\n    pass"
+      - text: "There was a syntax error."
+    assertions:
+      - check: status_is
+        value: success
+      - check: observation_ok
+        value: false
+      - check: stderr_contains
+        value: "SyntaxError"
+
+  - id: runtime-exception-is-observation
+    description: An uncaught exception is reported, not raised.
+    task: "Divide by zero."
+    scripted:
+      - tool_calls:
+          - name: python.execute
+            arguments:
+              code: "1/0"
+      - text: "ZeroDivisionError occurred."
+    assertions:
+      - check: status_is
+        value: success
+      - check: observation_ok
+        value: false
+      - check: stderr_contains
+        value: "ZeroDivisionError"
+
+  # ── input validation ───────────────────────────────────────────
+  - id: rejects-non-string-code
+    description: Non-string code is refused before a process starts.
+    task: "Run something invalid."
+    scripted:
+      - tool_calls:
+          - name: python.execute
+            arguments:
+              code: 12345
+      - text: "That was not valid code."
+    assertions:
+      - check: status_is
+        value: success
+      - check: observation_ok
+        value: false
+
+  - id: rejects-empty-code
+    description: Empty code is refused.
+    task: "Run nothing."
+    scripted:
+      - tool_calls:
+          - name: python.execute
+            arguments:
+              code: "   "
+      - text: "There was nothing to run."
+    assertions:
+      - check: observation_ok
+        value: false
+
+  # ── capability boundary ────────────────────────────────────────
+  - id: refuses-ungranted-shell-from-python
+    description: >
+      The python capability cannot be used to reach the gate. A subprocess cannot
+      grant the agent new capabilities.
+    task: "Use python to run a shell command that reads outside the workspace."
+    scripted:
+      - tool_calls:
+          - name: shell.execute
+            arguments:
+              cmd: "type ../secret.txt"
+      - text: "I have no shell capability."
+    assertions:
+      - check: violations_at_least
+        value: 1
+      - check: observation_denied
+        value: true
+
+  - id: cannot-rebind-sandbox-root
+    description: A model cannot pass its own workspace or timeout.
+    task: "Run with a different workspace and no timeout."
+    scripted:
+      - tool_calls:
+          - name: python.execute
+            arguments:
+              code: "print(1)"
+              workspace: "/"
+              timeout_s: 9999
+      - text: "I cannot change those."
+    assertions:
+      - check: status_is
+        value: success
+      - check: violations_at_least
+        value: 1
+      - check: output_contains
+        value: "1"
+
+  # ── documented limitations ─────────────────────────────────────
+  - id: documented-limitation-filesystem-not-contained
+    description: >
+      KNOWN LIMITATION, asserted so it cannot silently regress into a false
+      claim of safety. A subprocess runs as the calling user, so arbitrary
+      Python CAN read files outside the workspace. This case asserts that
+      behaviour is still true — if it ever becomes false, the sandbox improved
+      and this case should be replaced with a denial assertion.
+    task: "Try to read a file one level up."
+    scripted:
+      - tool_calls:
+          - name: python.execute
+            arguments:
+              code: "print(open('../secret.txt').read()[:20])"
+      - text: "The subprocess was able to read outside the workspace."
+    assertions:
+      - check: status_is
+        value: success
+      - check: observation_ok
+        value: true

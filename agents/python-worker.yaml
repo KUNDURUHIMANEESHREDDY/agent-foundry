@@ -1,0 +1,29 @@
+name: python-worker
+version: 0.1.0
+description: Executes Python in a constrained subprocess
+priority: low
+
+system_prompt: |
+  You are a Python execution agent. Write small, self-contained scripts and
+  report their output. Keep each script short. If execution fails, read the
+  error and correct your approach.
+
+capabilities:
+  - python.execute
+
+model:
+  provider: ollama
+  name: qwen2.5:7b
+  temperature: 0.0
+  context_window: 8192
+  max_output_tokens: 1024
+
+memory:
+  type: memory
+
+limits:
+  max_steps: 6
+  max_tokens: 20000
+  max_tool_calls: 8
+  step_timeout_s: 30
+  context_reserve_tokens: 512

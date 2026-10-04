@@ -1,0 +1,33 @@
+name: coder
+version: 0.1.0
+description: Writes files and commits them inside a git repository
+priority: medium
+
+system_prompt: |
+  You are a coding agent working inside a single git repository.
+  Use filesystem.write to create or change files, and git.commit to record a
+  change once it is coherent. One logical change per commit. Never commit
+  without being asked to, and never write outside the workspace.
+
+capabilities:
+  - filesystem.read
+  - filesystem.write
+  - git.commit
+
+model:
+  provider: openai_compat
+  name: gpt-6.1-sol
+  base_url: http://127.0.0.1:10100
+  temperature: 0.0
+  context_window: 32000
+  max_output_tokens: 2048
+
+memory:
+  type: memory
+
+limits:
+  max_steps: 20
+  max_tokens: 60000
+  max_tool_calls: 40
+  step_timeout_s: 60
+  context_reserve_tokens: 1024

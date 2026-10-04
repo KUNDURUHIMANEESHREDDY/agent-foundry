@@ -1,0 +1,78 @@
+"""Every relative markdown link must resolve.
+
+A dangling anchor is worse than no link: it reads as documentation and points
+nowhere. The README is edited often and each edit adds cross-references, so the
+check is mechanical.
+
+External URLs are not fetched — that belongs in a link checker, and a test that
+depends on the network fails for reasons unrelated to the code.
+"""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+import pytest
+
+README = Path(__file__).resolve().parents[1] / "README.md"
+
+
+def slugify(heading: str) -> str:
+    """Approximate GitHub's heading slugs: lowercase, drop punctuation, hyphenate."""
+    s = re.sub(r"[^\w\s-]", "", heading.strip().lower())
+    return re.sub(r"\s+", "-", s)
+
+
+def headings() -> set[str]:
+    out: set[str] = set()
+    in_fence = False
+    for line in README.read_text(encoding="utf-8").splitlines():
+        if line.strip().startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            # A `#` inside a fenced block is code, not a heading.
+            continue
+        m = re.match(r"^#{1,6}\s+(.*?)\s*$", line)
+        if m:
+            out.add(slugify(m.group(1)))
+    return out
+
+
+def anchors() -> list[str]:
+    return re.findall(
+        r"\[[^\]]+\]\(#([^)]+)\)", README.read_text(encoding="utf-8")
+    )
+
+
+class TestReadmeLinks:
+    def test_readme_exists(self):
+        assert README.is_file()
+
+    def test_it_has_internal_links_to_check(self):
+        """Otherwise the tests below pass vacuously."""
+        assert len(anchors()) >= 5
+
+    @pytest.mark.parametrize("anchor", sorted(set(anchors())))
+    def test_anchor_resolves(self, anchor):
+        assert anchor in headings(), f"#{anchor} has no heading"
+
+    def test_no_duplicate_heading_slugs(self):
+        """A duplicate slug makes GitHub append -1, silently breaking one link."""
+        text = README.read_text(encoding="utf-8")
+        in_fence = False
+        seen: dict[str, int] = {}
+        for line in text.splitlines():
+            if line.strip().startswith("```"):
+                in_fence = not in_fence
+                continue
+            if in_fence:
+                continue
+            m = re.match(r"^#{1,6}\s+(.*?)\s*$", line)
+            if m:
+                slug = slugify(m.group(1))
+                seen[slug] = seen.get(slug, 0) + 1
+
+        duplicates = {s: n for s, n in seen.items() if n > 1}
+        assert not duplicates, f"duplicate heading slugs: {duplicates}"

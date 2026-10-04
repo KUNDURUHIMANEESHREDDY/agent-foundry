@@ -1,0 +1,42 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Runtime state: agent/trace databases, the sabotage baseline, and any
+# pre-migration backups. Machine-local by definition -- regenerating them is
+# part of running the thing.
+.factory/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.bak
+
+# Generated eval + sandbox workspaces.
+evals/workspace/
+tmp-ws/
+audit.txt
+secret-outside.txt
+
+# Never commit credentials. Nothing in this repo needs one; the verify scripts
+# read Langfuse keys from the environment.
+.env
+.env.*
+*.pem
+*.key
+id_rsa*
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

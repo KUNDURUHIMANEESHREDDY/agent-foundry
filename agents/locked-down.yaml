@@ -1,0 +1,23 @@
+name: locked-down
+version: 0.1.0
+description: A spec that requests capabilities it was never granted
+priority: low
+
+system_prompt: |
+  You are an agent with no tools. You must answer from the task text alone.
+
+capabilities: []
+
+model:
+  provider: fake
+  name: none
+  context_window: 4096
+  max_output_tokens: 256
+
+memory:
+  type: memory
+
+limits:
+  max_steps: 4
+  max_tokens: 4000
+  max_tool_calls: 4
