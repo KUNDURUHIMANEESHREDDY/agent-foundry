@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import signal
 import stat
@@ -57,10 +58,15 @@ class Sabotage:
     description: str
     #: Where the mitigation is verified, when no eval case can reach it.
     #:
-    #: "unit" means a unit test calls the guard directly and would fail if it
-    #: were removed. That happens when the guard defends an internal path with no
+    #: A unit test calls the guard directly and would fail if it was removed.
+    #: That happens when the guard defends an internal path with no
     #: model-reachable input, so no black-box case can exist. It is still
     #: verified — but by a different test, and saying so is the honest report.
+    #:
+    #: The text must begin with a test id, `path/to/test_x.py::test_name`, which
+    #: `_named_guard` parses and then checks actually exists. An unverified
+    #: string would let this claim coverage forever: rename the test and the
+    #: audit would keep reporting the mitigation as verified.
     #:
     #: None means nothing verifies it, which is a real gap.
     covered_by: str | None = None
@@ -75,6 +81,90 @@ class SabotageResult:
     detected: bool
     verdict: str
     error: str | None = None
+
+
+#: `tests/test_write_git.py::test_push_is_not_reachable — because ...`
+#:
+#: The name may be a function or a class: `step-cap-wall-clock` is guarded by the
+#: whole `TestWallClockCeiling` class, so requiring `test_` here would fail a
+#: mitigation that is genuinely covered.
+_GUARD_ID = re.compile(r"^(?P<path>[\w./\\-]+\.py)::(?P<name>\w+)")
+
+
+def _named_guard(covered_by: str, root: Path | None = None) -> str | None:
+    """Return a problem with the named guard, or None if it really exists.
+
+    `covered_by` is prose that starts with a test id. This checks the two halves
+    of that claim: that a test id is present at all, and that the file and
+    symbol it names are really there.
+
+    Without this the audit reports "GUARDED elsewhere" on the strength of a
+    string literal. Renaming or deleting the test leaves the claim standing, and
+    an unbacked coverage claim is worse than an admitted gap: it converts a real
+    hole into a green line in the report.
+    """
+    base = Path(root) if root is not None else Path(__file__).resolve().parents[3]
+
+    match = _GUARD_ID.match(covered_by.strip())
+    if not match:
+        return (
+            f"covered_by does not begin with a test id "
+            f"(path/to/test_x.py::test_name): {covered_by!r}"
+        )
+
+    path = base / match.group("path")
+    if not path.is_file():
+        return f"covered_by names {match.group('path')}, which does not exist"
+
+    name = match.group("name")
+    source = path.read_text(encoding="utf-8")
+    defined = re.search(rf"^\s*(?:def|class)\s+{re.escape(name)}\b", source, re.M)
+    if not defined:
+        return (
+            f"covered_by names {name}, which is neither a function nor a class "
+            f"in {match.group('path')}"
+        )
+
+    return None
+
+
+def _verdict_for_unclaimed(
+    sabotage: Sabotage, after_failed: list[str], hangs: list[str]
+) -> tuple[bool, str]:
+    """Decide a mitigation that no eval case claims.
+
+    Extracted so the rule is directly testable, and so there is exactly one copy
+    of it. It previously lived inline, where a test could only reach it by
+    reimplementing the logic -- and a reimplementation cannot detect a
+    regression in the original.
+
+    No eval case claims this mitigation, so detection rests on the named unit
+    test, which is checked to exist rather than trusted.
+
+    Unrelated failures must not decide this. They used to: any collateral at all
+    flipped the verdict to UNATTRIBUTED, so whether the mitigation counted as
+    covered depended on whether a timing-sensitive case happened to fail during
+    its run. The audit's own result was a coin flip -- CI reported
+    `sabotages: 9 detected: 8` on a collateral failure that belonged to another
+    mitigation. Collateral is still reported; it just no longer overrules a
+    verified guard.
+    """
+    guard_problem = (
+        _named_guard(sabotage.covered_by) if sabotage.covered_by else None
+    )
+
+    collateral_note = ""
+    if after_failed or hangs:
+        collateral_note = (
+            f" ({len(after_failed)} unrelated case(s) also failed, "
+            f"attributed elsewhere)"
+        )
+
+    if sabotage.covered_by and guard_problem is None:
+        return True, f"GUARDED elsewhere: {sabotage.covered_by}{collateral_note}"
+    if guard_problem:
+        return False, f"UNCOVERED: {guard_problem}"
+    return False, "UNCOVERED: no eval case or unit test claims this"
 
 
 # ── the catalog ───────────────────────────────────────────────────────
@@ -699,21 +789,9 @@ def audit(
                 ]
 
                 if not sabotage.must_fail:
-                    if after_failed or hangs:
-                        # Something noticed. That is good, but the audit cannot
-                        # attribute it, so say what actually happened rather than
-                        # claiming credit for it.
-                        detected = False
-                        verdict = (
-                            f"UNATTRIBUTED: {len(after_failed)} case(s) failed, "
-                            f"{len(hangs)} hung, none claims this mitigation"
-                        )
-                    elif sabotage.covered_by:
-                        detected = True
-                        verdict = f"GUARDED elsewhere: {sabotage.covered_by}"
-                    else:
-                        detected = False
-                        verdict = "UNCOVERED: no eval case or unit test claims this"
+                    detected, verdict = _verdict_for_unclaimed(
+                        sabotage, after_failed, hangs
+                    )
                     return SabotageResult(
                         sabotage, True, after_failed + hangs, [], detected, verdict
                     )
